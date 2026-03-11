@@ -1,5 +1,9 @@
 # Microsoft OpenTelemetry Distro — POC
 
+## Architecture
+
+![Microsoft OTEL Distro Architecture](images/architecture.png)
+
 This project is a **proof of concept** for the [`microsoft-opentelemetry`](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/monitor/microsoft-opentelemetry) Python package — a unified OpenTelemetry distribution that simplifies observability onboarding for both **Azure Monitor** and **Microsoft Agent 365 (A365)** customers.
 
 It uses a real Agent Framework agent as the workload to demonstrate the difference between configuring observability manually vs. using the distro.
