@@ -4,24 +4,44 @@
 
 ![Microsoft OTEL Distro Architecture](images/architecture.png)
 
-This project is a **proof of concept** for the [`microsoft-opentelemetry`](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/monitor/microsoft-opentelemetry) Python package — a unified OpenTelemetry distribution that simplifies observability onboarding for both **Azure Monitor** and **Microsoft Agent 365 (A365)** customers.
+This project is a **proof of concept** for the [`microsoft-opentelemetry`](https://github.com/hectorhdzg/azure-sdk-for-python/tree/hectorhdzg/microsoftpoc/sdk/monitor/microsoft-opentelemetry) Python package — a unified OpenTelemetry distribution that provides a **single onboarding experience** for observability across **Azure Monitor**, **Microsoft Agent 365 (A365)**, and **OTLP**-compatible backends.
 
 It uses a real Agent Framework agent as the workload to demonstrate the difference between configuring observability manually vs. using the distro.
 
-## The Problem
+> For project structure, setup instructions, and environment variables, see [docs/SETUP.md](docs/SETUP.md).
+> For design considerations, trade-offs, and multi-language support, see [docs/considerations.md](docs/considerations.md).
 
-Today, setting up full observability for an A365 agent requires:
+## Why This Matters
 
-- Manually creating a `TracerProvider` via A365 `configure()`
-- Individually initializing 4+ instrumentors (`AgentFrameworkInstrumentor`, `OpenAIAgentsTraceInstrumentor`, `SemanticKernelInstrumentor`, `CustomLangChainInstrumentor`)
-- Managing dependency version checks (`skip_dep_check=True`)
-- Handling token caches for the A365 exporter
-- Configuring loggers separately
-- **~250 lines of boilerplate** (see [`observability_config.py`](observability_config.py))
+### 1. Centralized Onboarding — Reducing Customer Confusion
+
+Microsoft customers today face a fragmented observability landscape:
+
+- **Azure Monitor** has its own SDK (`azure-monitor-opentelemetry`), its own setup, and its own documentation
+- **Agent 365** has a separate observability SDK (`a365-observability-core`), separate instrumentors, and a completely different configuration model
+- **OpenTelemetry OTLP** requires yet another set of exporter packages and manual provider wiring
+- **GenAI instrumentations** (OpenAI, LangChain, Semantic Kernel) come from different community packages with different setup patterns
+
+A developer building an AI agent has to discover, learn, and integrate pieces from **multiple product teams** just to get traces flowing. The `microsoft-opentelemetry` distro gives them **one package, one API, one set of docs** — regardless of which backends they target.
+
+### 2. Eliminating Duplication of Effort Across Teams
+
+Without a shared distro, each product team independently solves the same problems:
+
+- Azure Monitor builds its own instrumentation setup logic
+- A365 builds its own `TracerProvider` configuration and exporter wiring
+- GenAI libraries each ship their own onboarding guides
+- Every team writes their own samples, docs, and troubleshooting guides
+
+The distro **converges these efforts into a single codebase** — shared instrumentation setup, shared exporter configuration, shared testing, and a shared surface for customers. Bug fixes and improvements benefit all backends at once.
+
+### 3. Less Boilerplate for Developers
+
+As a direct result of centralization, developers go from **~250 lines of manual setup** (see [`src/observability_config.py`](src/observability_config.py)) — creating tracer providers, initializing 4+ instrumentors individually, managing token caches, handling dependency checks — down to **~60 lines** with a single function call (see [`src/microsoft_distro_observability_config.py`](src/microsoft_distro_observability_config.py)).
 
 ## The Solution
 
-The `microsoft-opentelemetry` distro replaces all of that with **a single function call**:
+The `microsoft-opentelemetry` distro replaces fragmented, product-specific setup with **a single function call**:
 
 ```python
 from microsoft.opentelemetry import configure_microsoft_opentelemetry
@@ -34,19 +54,7 @@ configure_microsoft_opentelemetry(
 )
 ```
 
-See [`microsoft_distro_observability_config.py`](microsoft_distro_observability_config.py) — **~60 lines** for the same functionality.
-
-## Project Structure
-
-| File | Purpose |
-|---|---|
-| `observability_config.py` | **A365 manual approach** — ~250 lines, manual TracerProvider setup, 4 separate instrumentor initializations |
-| `microsoft_distro_observability_config.py` | **Microsoft Distro approach** — ~60 lines, single `configure_microsoft_opentelemetry()` call |
-| `instrumentation_span_processor.py` | Shared `SpanProcessor` that stamps every span with instrumentation metadata (used by both approaches) |
-| `token_cache.py` | Token cache for A365 exporter authentication (shared) |
-| `agent.py` | Agent Framework agent using Azure OpenAI |
-| `host_agent_server.py` | aiohttp server hosting the agent on port 3978 |
-| `vendor/` | Vendored `microsoft-opentelemetry` wheel (pre-release, not yet on PyPI) |
+See [`src/microsoft_distro_observability_config.py`](src/microsoft_distro_observability_config.py) for the full implementation.
 
 ## What the Distro Handles
 
@@ -59,67 +67,196 @@ See [`microsoft_distro_observability_config.py`](microsoft_distro_observability_
 - **GenAI OTel Instrumentations**: OpenAI, OpenAI Agents, LangChain (community contrib)
 - **Standard Instrumentations**: Django, FastAPI, Flask, requests, urllib3, psycopg2
 
-## Prerequisites
+## Configuration Reference
 
-- Python 3.11+
-- Azure OpenAI API credentials (API key or Azure Identity)
+### Quick Start Examples
 
-## Quick Start
-
-1. **Clone and install**:
-   ```bash
-   git clone https://github.com/hectorhdzg/microsoft-opentelemetry-poc.git
-   cd microsoft-opentelemetry-poc
-   python -m venv .venv
-   .venv/Scripts/activate   # Windows
-   # source .venv/bin/activate  # Linux/macOS
-   pip install -e .
-   ```
-
-2. **Configure environment** — copy `.env.template` to `.env` and fill in your Azure OpenAI credentials:
-   ```bash
-   cp .env.template .env
-   # Edit .env with your AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
-   ```
-
-3. **Run the agent**:
-   ```bash
-   python start_with_generic_host.py
-   ```
-
-4. **Test with Agents Playground**:
-   ```bash
-   winget install Microsoft.M365AgentsPlayground
-   ```
-   Connect the Playground to `http://localhost:3978/api/messages`.
-
-## Switching Between Approaches
-
-In [`host_agent_server.py`](host_agent_server.py), change the import:
+**Minimal — Azure Monitor only:**
 
 ```python
-# A365 manual approach (~250 lines of setup)
-from observability_config import setup_observability
+from microsoft.opentelemetry import configure_microsoft_opentelemetry
 
-# Microsoft Distro approach (~60 lines of setup)
-from microsoft_distro_observability_config import setup_observability
+configure_microsoft_opentelemetry(
+    azure_monitor_connection_string="InstrumentationKey=...;IngestionEndpoint=...",
+)
 ```
 
-Both expose the same `setup_observability()` API — it's a drop-in swap.
+**OTLP only (no Azure Monitor):**
 
-## Environment Variables
+```python
+configure_microsoft_opentelemetry(
+    enable_otlp_export=True,
+    otlp_endpoint="http://localhost:4318",
+)
+```
 
-| Variable | Purpose |
-|---|---|
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
-| `AZURE_OPENAI_DEPLOYMENT` | Model deployment name (e.g., `gpt-4.1`) |
-| `ENABLE_INSTRUMENTATION=true` | Turns on span creation in AgentFramework SDK |
-| `ENABLE_SENSITIVE_DATA=true` | Include message content in spans |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Azure Monitor (optional) |
-| `ENABLE_A365_EXPORTER=true` | Send spans to A365 cloud backend (optional) |
+**Azure Monitor + OTLP + A365:**
+
+```python
+configure_microsoft_opentelemetry(
+    azure_monitor_connection_string="InstrumentationKey=...;IngestionEndpoint=...",
+    enable_otlp_export=True,
+    enable_a365_export=True,
+    a365_token_resolver=lambda agent_id, tenant_id: get_token(agent_id, tenant_id),
+)
+```
+
+**With GenAI instrumentations (OpenAI + LangChain):**
+
+```python
+configure_microsoft_opentelemetry(
+    azure_monitor_connection_string="InstrumentationKey=...;IngestionEndpoint=...",
+    enable_genai_openai_instrumentation=True,
+    enable_genai_openai_agents_instrumentation=True,
+    enable_genai_langchain_instrumentation=True,
+)
+```
+
+**With A365 framework instrumentations:**
+
+```python
+configure_microsoft_opentelemetry(
+    enable_a365_export=True,
+    a365_token_resolver=my_token_resolver,
+    enable_a365_openai_instrumentation=True,
+    enable_a365_langchain_instrumentation=True,
+    enable_a365_semantickernel_instrumentation=True,
+    enable_a365_agentframework_instrumentation=True,
+)
+```
+
+**Environment-variable driven (zero-code config):**
+
+```bash
+# Exporters
+export APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=..."
+export ENABLE_OTLP_EXPORTER=true
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+
+# GenAI instrumentations
+export ENABLE_GENAI_OPENAI_INSTRUMENTATION=true
+export ENABLE_GENAI_OPENAI_AGENTS_INSTRUMENTATION=true
+export ENABLE_GENAI_LANGCHAIN_INSTRUMENTATION=true
+```
+
+```python
+from microsoft.opentelemetry import configure_microsoft_opentelemetry
+configure_microsoft_opentelemetry()
+```
+
+### Parameters
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| **Exporters** | | | |
+| `azure_monitor_connection_string` | `str` | Application Insights connection string | `APPLICATIONINSIGHTS_CONNECTION_STRING` env var |
+| `enable_azure_monitor_export` | `bool` | Enable Azure Monitor (auto-enabled when connection string is set) | `False` |
+| `enable_otlp_export` | `bool` | Enable OTLP exporter | `False` |
+| `otlp_endpoint` | `str` | OTLP collector endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT` env var |
+| `otlp_protocol` | `str` | `"http/protobuf"` or `"grpc"` | `"http/protobuf"` |
+| `otlp_headers` | `str` | OTLP headers (e.g. for authentication) | `OTEL_EXPORTER_OTLP_HEADERS` env var |
+| `enable_a365_export` | `bool` | Enable Agent365 exporter | `False` |
+| `a365_token_resolver` | `callable` | `(agent_id, tenant_id) -> token` | `None` |
+| `a365_cluster_category` | `str` | A365 cluster category | `"prod"` |
+| `a365_exporter_options` | `Agent365ExporterOptions` | Advanced A365 exporter config | `None` |
+| **GenAI Instrumentations** | | | |
+| `enable_genai_openai_instrumentation` | `bool` | Instrument OpenAI SDK (chat, embeddings) | `False` |
+| `enable_genai_openai_agents_instrumentation` | `bool` | Instrument OpenAI Agents SDK | `False` |
+| `enable_genai_langchain_instrumentation` | `bool` | Instrument LangChain | `False` |
+| **A365 Instrumentations** | | | |
+| `enable_a365_openai_instrumentation` | `bool` | A365 OpenAI Agents extension | `False` |
+| `enable_a365_langchain_instrumentation` | `bool` | A365 LangChain extension | `False` |
+| `enable_a365_semantickernel_instrumentation` | `bool` | A365 Semantic Kernel extension | `False` |
+| `enable_a365_agentframework_instrumentation` | `bool` | A365 Agent Framework extension | `False` |
+| **Pipeline Control** | | | |
+| `disable_tracing` | `bool` | Disable trace collection | `False` |
+| `disable_logging` | `bool` | Disable log collection | `False` |
+| `disable_metrics` | `bool` | Disable metric collection | `False` |
+| `resource` | `Resource` | OpenTelemetry Resource | Auto-detected |
+| `span_processors` | `list` | Additional `SpanProcessor` instances | `[]` |
+| `log_record_processors` | `list` | Additional `LogRecordProcessor` instances | `[]` |
+| `metric_readers` | `list` | Additional `MetricReader` instances | `[]` |
+| `views` | `list` | Metric `View` instances | `[]` |
+| `sampling_ratio` | `float` | Fixed-percentage sampling (0.0–1.0) | not set |
+| `traces_per_second` | `float` | Rate-limited sampling TPS | `5.0` |
+| `logger_name` | `str` | Python logger name for log capture | `""` (root) |
+| `logging_formatter` | `Formatter` | Python `logging.Formatter` for collected logs | `None` |
+| `instrumentation_options` | `dict` | Fine-grained instrumentation control (e.g. `{"flask": {"enabled": False}}`) | All supported libs enabled |
+| `enable_live_metrics` | `bool` | Azure Monitor live metrics | `True` |
+| `enable_performance_counters` | `bool` | Azure Monitor performance counters | `True` |
+| `enable_trace_based_sampling_for_logs` | `bool` | Correlate log sampling with trace sampling | `False` |
+| `browser_sdk_loader_config` | `dict` | Azure Monitor browser SDK loader configuration | `{}` |
+
+### Environment Variables
+
+| Variable | Maps to | Values |
+|----------|---------|--------|
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | `azure_monitor_connection_string` | Connection string |
+| `ENABLE_OTLP_EXPORTER` | `enable_otlp_export` | `true` / `false` |
+| `ENABLE_A365_EXPORTER` | `enable_a365_export` | `true` / `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `otlp_endpoint` | URL |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `otlp_protocol` | `http/protobuf` / `grpc` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `otlp_headers` | key=value pairs |
+| `A365_CLUSTER_CATEGORY` | `a365_cluster_category` | string |
+| `ENABLE_GENAI_OPENAI_INSTRUMENTATION` | `enable_genai_openai_instrumentation` | `true` / `false` |
+| `ENABLE_GENAI_OPENAI_AGENTS_INSTRUMENTATION` | `enable_genai_openai_agents_instrumentation` | `true` / `false` |
+| `ENABLE_GENAI_LANGCHAIN_INSTRUMENTATION` | `enable_genai_langchain_instrumentation` | `true` / `false` |
+| `ENABLE_A365_OPENAI_INSTRUMENTATION` | `enable_a365_openai_instrumentation` | `true` / `false` |
+| `ENABLE_A365_LANGCHAIN_INSTRUMENTATION` | `enable_a365_langchain_instrumentation` | `true` / `false` |
+| `ENABLE_A365_SEMANTICKERNEL_INSTRUMENTATION` | `enable_a365_semantickernel_instrumentation` | `true` / `false` |
+| `ENABLE_A365_AGENTFRAMEWORK_INSTRUMENTATION` | `enable_a365_agentframework_instrumentation` | `true` / `false` |
+| `OTEL_TRACES_EXPORTER` | `disable_tracing` | Set to `none` to disable |
+| `OTEL_LOGS_EXPORTER` | `disable_logging` | Set to `none` to disable |
+| `OTEL_METRICS_EXPORTER` | `disable_metrics` | Set to `none` to disable |
+| `PYTHON_APPLICATIONINSIGHTS_LOGGER_NAME` | `logger_name` | Logger name string |
+| `PYTHON_APPLICATIONINSIGHTS_LOGGING_FORMAT` | `logging_formatter` | Logging format string |
+
+### Architecture
+
+```
+configure_microsoft_opentelemetry(**kwargs)
+│
+├─ Step 1: Azure Monitor (if azure_monitor_connection_string provided)
+│  └─ Delegates to configure_azure_monitor() from azure-monitor-opentelemetry
+│     Sets up TracerProvider, LoggerProvider, MeterProvider, and instrumentations
+│
+├─ Step 2: Standalone providers (if Azure Monitor disabled)
+│  └─ Creates TracerProvider, LoggerProvider, MeterProvider directly
+│
+├─ Step 3: OTLP exporters (if enable_otlp_export=True)
+│  └─ Adds BatchSpanProcessor, BatchLogRecordProcessor, PeriodicExportingMetricReader
+│
+├─ Step 4: A365 exporter (if enable_a365_export=True)
+│  └─ Adds EnrichingBatchSpanProcessor → Agent365Exporter
+│
+├─ Step 5: Standard instrumentations (only when Azure Monitor is disabled)
+│  └─ Django, Flask, FastAPI, Requests, urllib, urllib3, psycopg2, Azure SDK
+│
+├─ Step 6: A365 observability instrumentations (if any enabled)
+│  └─ OpenAI Agents, LangChain, Semantic Kernel, Agent Framework extensions
+│
+└─ Step 7: GenAI OTel contrib instrumentations (if any enabled)
+   └─ OpenAIInstrumentor, OpenAIAgentsInstrumentor, LangchainInstrumentor
+```
+
+### Built-in Instrumentations
+
+| Library | Package |
+|---------|---------|
+| Django | `opentelemetry-instrumentation-django` |
+| FastAPI | `opentelemetry-instrumentation-fastapi` |
+| Flask | `opentelemetry-instrumentation-flask` |
+| Psycopg2 | `opentelemetry-instrumentation-psycopg2` |
+| Requests | `opentelemetry-instrumentation-requests` |
+| urllib | `opentelemetry-instrumentation-urllib` |
+| urllib3 | `opentelemetry-instrumentation-urllib3` |
+| Azure SDK | `azure-core` tracing integration |
 
 ## License
 
 Copyright (c) Microsoft Corporation. All rights reserved.
 Licensed under the MIT License.
+
+---
+
+> **Disclaimer:** Parts of this document were generated with the assistance of AI. While efforts have been made to ensure accuracy, there may be inaccuracies. Please verify critical details independently.
