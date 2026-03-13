@@ -20,7 +20,7 @@ Microsoft customers today face a fragmented observability landscape:
 - **Azure Monitor** has its own SDK (`azure-monitor-opentelemetry`), its own setup, and its own documentation
 - **Agent 365** has a separate observability SDK (`a365-observability-core`), separate instrumentors, and a completely different configuration model
 - **OpenTelemetry OTLP** requires yet another set of exporter packages and manual provider wiring
-- **GenAI instrumentations** (OpenAI, LangChain, Semantic Kernel) come from different community packages with different setup patterns
+- **GenAI instrumentations** (OpenAI, LangChain) come from different community packages with different setup patterns
 
 A developer building an AI agent has to discover, learn, and integrate pieces from **multiple product teams** just to get traces flowing. The `microsoft-opentelemetry` distro gives them **one package, one API, one set of docs** — regardless of which backends they target.
 
@@ -49,7 +49,6 @@ from microsoft.opentelemetry import configure_microsoft_opentelemetry
 configure_microsoft_opentelemetry(
     enable_a365_agentframework_instrumentation=True,
     enable_a365_openai_instrumentation=True,
-    enable_a365_semantickernel_instrumentation=True,
     enable_a365_langchain_instrumentation=True,
 )
 ```
@@ -62,7 +61,6 @@ See [`src/microsoft_distro_observability_config.py`](src/microsoft_distro_observ
 - **A365 Instrumentations** (span enrichment & bridging):
   - `AgentFrameworkInstrumentor` — enriches existing AgentFramework spans (normalizes attributes)
   - `OpenAIAgentsTraceInstrumentor` — bridges OpenAI Agents SDK traces → OTel spans
-  - `SemanticKernelInstrumentor` — enriches SK spans (normalizes naming)
   - `CustomLangChainInstrumentor` — bridges LangChain callbacks → OTel spans
 - **GenAI OTel Instrumentations**: OpenAI, OpenAI Agents, LangChain (community contrib)
 - **Standard Instrumentations**: Django, FastAPI, Flask, requests, urllib3, psycopg2
@@ -120,7 +118,6 @@ configure_microsoft_opentelemetry(
     a365_token_resolver=my_token_resolver,
     enable_a365_openai_instrumentation=True,
     enable_a365_langchain_instrumentation=True,
-    enable_a365_semantickernel_instrumentation=True,
     enable_a365_agentframework_instrumentation=True,
 )
 ```
@@ -166,7 +163,6 @@ configure_microsoft_opentelemetry()
 | **A365 Instrumentations** | | | |
 | `enable_a365_openai_instrumentation` | `bool` | A365 OpenAI Agents extension | `False` |
 | `enable_a365_langchain_instrumentation` | `bool` | A365 LangChain extension | `False` |
-| `enable_a365_semantickernel_instrumentation` | `bool` | A365 Semantic Kernel extension | `False` |
 | `enable_a365_agentframework_instrumentation` | `bool` | A365 Agent Framework extension | `False` |
 | **Pipeline Control** | | | |
 | `disable_tracing` | `bool` | Disable trace collection | `False` |
@@ -203,7 +199,6 @@ configure_microsoft_opentelemetry()
 | `ENABLE_GENAI_LANGCHAIN_INSTRUMENTATION` | `enable_genai_langchain_instrumentation` | `true` / `false` |
 | `ENABLE_A365_OPENAI_INSTRUMENTATION` | `enable_a365_openai_instrumentation` | `true` / `false` |
 | `ENABLE_A365_LANGCHAIN_INSTRUMENTATION` | `enable_a365_langchain_instrumentation` | `true` / `false` |
-| `ENABLE_A365_SEMANTICKERNEL_INSTRUMENTATION` | `enable_a365_semantickernel_instrumentation` | `true` / `false` |
 | `ENABLE_A365_AGENTFRAMEWORK_INSTRUMENTATION` | `enable_a365_agentframework_instrumentation` | `true` / `false` |
 | `OTEL_TRACES_EXPORTER` | `disable_tracing` | Set to `none` to disable |
 | `OTEL_LOGS_EXPORTER` | `disable_logging` | Set to `none` to disable |
@@ -233,7 +228,7 @@ configure_microsoft_opentelemetry(**kwargs)
 │  └─ Django, Flask, FastAPI, Requests, urllib, urllib3, psycopg2, Azure SDK
 │
 ├─ Step 6: A365 observability instrumentations (if any enabled)
-│  └─ OpenAI Agents, LangChain, Semantic Kernel, Agent Framework extensions
+│  └─ OpenAI Agents, LangChain, Agent Framework extensions
 │
 └─ Step 7: GenAI OTel contrib instrumentations (if any enabled)
    └─ OpenAIInstrumentor, OpenAIAgentsInstrumentor, LangchainInstrumentor

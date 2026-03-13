@@ -90,7 +90,7 @@ def _configure_a365_observability() -> bool:
 def _instrument_agentframework() -> bool:
     """
     Attach the AgentFramework span processor and enricher so that every
-    ChatAgent.invoke() call produces OpenTelemetry spans automatically.
+    Agent.invoke() call produces OpenTelemetry spans automatically.
 
     Returns True if instrumentation succeeded.
     """
@@ -132,31 +132,7 @@ def _instrument_openai_agents() -> bool:
 
 
 # =============================================================================
-# 6. SEMANTIC KERNEL INSTRUMENTATION
-# =============================================================================
-
-def _instrument_semantic_kernel() -> bool:
-    """
-    Attach the Semantic Kernel span processor so that SK function invocations
-    and kernel operations produce spans in the A365 pipeline.
-
-    Package: microsoft-agents-a365-observability-extensions-semantic-kernel
-    """
-    try:
-        from microsoft_agents_a365.observability.extensions.semantickernel.trace_instrumentor import (
-            SemanticKernelInstrumentor,
-        )
-
-        SemanticKernelInstrumentor().instrument(skip_dep_check=True)
-        logger.info("Semantic Kernel auto-instrumentation enabled")
-        return True
-    except Exception as e:
-        logger.warning("Failed to enable Semantic Kernel instrumentation: %s", e)
-        return False
-
-
-# =============================================================================
-# 7. LANGCHAIN INSTRUMENTATION
+# 6. LANGCHAIN INSTRUMENTATION
 # =============================================================================
 
 def _instrument_langchain() -> bool:
@@ -196,8 +172,7 @@ def setup_observability() -> bool:
       2. Set up the TracerProvider + exporter (console or A365)
       3. Attach AgentFramework auto-instrumentation
       4. Attach OpenAI Agents SDK instrumentation
-      5. Attach Semantic Kernel instrumentation
-      6. Attach LangChain instrumentation
+      5. Attach LangChain instrumentation
 
     Returns True if configure and at least AgentFramework instrumentation succeeded.
     """
@@ -213,7 +188,6 @@ def setup_observability() -> bool:
     results = {
         "AgentFramework": _instrument_agentframework(),
         "OpenAI Agents":  _instrument_openai_agents(),
-        "Semantic Kernel": _instrument_semantic_kernel(),
         "LangChain":       _instrument_langchain(),
     }
 
@@ -221,7 +195,6 @@ def setup_observability() -> bool:
     _key_map = {
         "AgentFramework": "agentframework",
         "OpenAI Agents": "openai",
-        "Semantic Kernel": "semantic_kernel",
         "LangChain": "langchain",
     }
     enabled = [_key_map[name] for name, ok in results.items() if ok]

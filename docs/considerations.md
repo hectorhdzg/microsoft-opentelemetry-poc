@@ -15,9 +15,9 @@ The distro wheel itself is small (~19 KB), but it pulls in a significant depende
 | **OTLP Exporters** | `opentelemetry-exporter-otlp-proto-http ~=1.39` | HTTP/protobuf by default; gRPC via `[otlp-grpc]` extra |
 | **Web Instrumentations** (7) | Django, FastAPI, Flask, psycopg2, requests, urllib, urllib3 | All installed regardless of which framework is used |
 | **GenAI Instrumentations** (3) | `opentelemetry-instrumentation-openai-v2`, `-openai-agents`, `-langchain` | Community contrib packages |
-| **A365 Observability** (5) | `microsoft-agents-a365-observability-core`, extensions for OpenAI, LangChain, Semantic Kernel, Agent Framework | A365-specific span enrichment and bridging |
+| **A365 Observability** (4) | `microsoft-agents-a365-observability-core`, extensions for OpenAI, LangChain, Agent Framework | A365-specific span enrichment and bridging |
 
-**Total transitive dependency count is high.** Developers who only need Azure Monitor + one framework (e.g. FastAPI) still get Django, Flask, psycopg2, LangChain, Semantic Kernel instrumentation packages installed.
+**Total transitive dependency count is high.** Developers who only need Azure Monitor + one framework (e.g. FastAPI) still get Django, Flask, psycopg2, LangChain instrumentation packages installed.
 
 ### Open Questions
 
@@ -50,7 +50,6 @@ The current prototype is **Python-only**. For the distro to serve as the unified
 - A365 has an existing .NET SDK: [`Agent365-dotnet`](https://github.com/microsoft/Agent365-dotnet)
 - .NET has first-class OpenTelemetry support via `Microsoft.Extensions.Hosting` and `IServiceCollection` extensions
 - A .NET distro could use the builder pattern: `services.AddMicrosoftOpenTelemetry(o => { o.EnableA365Export = true; })`
-- Semantic Kernel is .NET-native, so SK instrumentation would be a natural fit
 
 ### Considerations for Multi-Language
 

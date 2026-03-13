@@ -60,7 +60,6 @@ def setup_observability() -> bool:
       - A365 configure() call
       - AgentFrameworkInstrumentor().instrument()
       - OpenAIAgentsTraceInstrumentor().instrument()
-      - SemanticKernelInstrumentor().instrument()
       - CustomLangChainInstrumentor()
       - Logger configuration
 
@@ -72,7 +71,7 @@ def setup_observability() -> bool:
         from instrumentation_span_processor import InstrumentationSpanProcessor
 
         # All A365 instrumentors we're requesting
-        enabled = ["agentframework", "openai", "semantic_kernel", "langchain"]
+        enabled = ["agentframework", "openai", "langchain"]
         meta_processor = InstrumentationSpanProcessor(
             setup_approach="microsoft-distro",
             enabled_instrumentors=enabled,
@@ -84,7 +83,7 @@ def setup_observability() -> bool:
             # enable_azure_monitor_export=True,
 
             # OTLP (set ENABLE_OTLP_EXPORTER=true and OTEL_EXPORTER_OTLP_ENDPOINT in env)
-            # enable_otlp_export=True,
+            enable_otlp_export=os.getenv("ENABLE_OTLP_EXPORTER", "false").lower() == "true",
 
             # A365 cloud exporter
             enable_a365_export=os.getenv("ENABLE_A365_EXPORTER", "false").lower() == "true",
@@ -99,7 +98,6 @@ def setup_observability() -> bool:
             # --- A365 framework instrumentations (all enabled) ---
             enable_a365_agentframework_instrumentation=True,
             enable_a365_openai_instrumentation=True,
-            enable_a365_semantickernel_instrumentation=True,
             enable_a365_langchain_instrumentation=True,
 
             # --- GenAI OTel contrib instrumentations (optional) ---

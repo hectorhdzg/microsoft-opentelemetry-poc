@@ -5,7 +5,8 @@
 ```
 ├── README.md                                # POC specification
 ├── pyproject.toml                           # Python project config & dependencies
-├── .env.template                            # Environment variable template
+├── .env.template                            # Env template — standard (console, OTLP, Azure Monitor)
+├── .env.a365                                # Env template — A365 + Azure Monitor + OTLP
 ├── src/
 │   ├── start_with_generic_host.py           # Entry point
 │   ├── agent.py                             # Agent Framework agent (Azure OpenAI)
@@ -18,6 +19,9 @@
 │   ├── token_cache.py                       # Token cache for A365 exporter auth
 │   └── ToolingManifest.json                 # MCP tool manifest
 ├── vendor/                                  # Vendored microsoft-opentelemetry wheel
+├── docker/                                  # Local OTLP stack (OTel Collector + Jaeger)
+│   ├── docker-compose.yml                   # Starts collector and Jaeger
+│   └── otel-collector-config.yml            # Collector pipeline config
 ├── docs/                                    # Design docs and demo scripts
 └── images/                                  # Architecture diagrams
 ```
@@ -26,6 +30,7 @@
 
 - Python 3.11+
 - Azure OpenAI API credentials (API key or Azure Identity)
+- Docker (optional — only needed for OTLP/Jaeger setup)
 
 ## Quick Start
 
@@ -39,10 +44,28 @@
    pip install -e .
    ```
 
-2. **Configure environment** — copy `.env.template` to `.env` and fill in your Azure OpenAI credentials:
+2. **Configure environment** — pick the template that matches your setup:
+
+   **Option A: Standard (no A365 auth)**
+   Use this for local development. Telemetry prints to console by default. Uncomment OTLP and/or Azure Monitor lines to enable those exporters.
    ```bash
    cp .env.template .env
-   # Edit .env with your AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
+   # Edit .env — fill in AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION
+   # Optionally uncomment APPLICATIONINSIGHTS_CONNECTION_STRING for Azure Monitor
+   # Optionally uncomment ENABLE_OTLP_EXPORTER + OTEL_EXPORTER_OTLP_ENDPOINT for OTLP
+   ```
+   For OTLP, start the Docker stack first:
+   ```bash
+   docker compose -f docker/docker-compose.yml up -d
+   ```
+   Then browse traces in **Jaeger UI** at [http://localhost:16686](http://localhost:16686).
+
+   **Option B: A365 + Azure Monitor (full cloud)**
+   Use this when you have A365 agentic auth credentials. Includes Azure Monitor and optional OTLP.
+   ```bash
+   cp .env.a365 .env
+   # Edit .env — fill in Azure OpenAI credentials, APPLICATIONINSIGHTS_CONNECTION_STRING,
+   # and the A365 auth block (CLIENTID, CLIENTSECRET, TENANTID, SCOPES)
    ```
 
 3. **Run the agent**:
@@ -72,16 +95,34 @@ Both expose the same `setup_observability()` API — it's a drop-in swap.
 
 ## Environment Variables
 
+### Required (both templates)
+
 | Variable | Purpose |
 |---|---|
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_DEPLOYMENT` | Model deployment name (e.g., `gpt-4.1`) |
 | `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version |
-| `ENABLE_INSTRUMENTATION=true` | Turns on span creation in AgentFramework SDK |
+| `ENABLE_OTEL=true` | Enable OTel spans in AgentFramework SDK |
 | `ENABLE_SENSITIVE_DATA=true` | Include message content in spans |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Azure Monitor (optional) |
-| `ENABLE_A365_EXPORTER=true` | Send spans to A365 cloud backend (optional) |
+
+### Cloud exporters (`.env.a365` only)
+
+| Variable | Purpose |
+|---|---|
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Azure Monitor / Application Insights |
+| `ENABLE_A365_EXPORTER=true` | Send spans to A365 cloud backend |
+| `ENABLE_OTLP_EXPORTER=true` | Send spans via OTLP (e.g. Jaeger, Aspire) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint |
+
+### A365 agentic auth (`.env.a365` only)
+
+| Variable | Purpose |
+|---|---|
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID` | App registration client ID |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET` | App registration client secret |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID` | Azure AD tenant ID |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__SCOPES` | Auth scopes |
 
 ## Key Files
 

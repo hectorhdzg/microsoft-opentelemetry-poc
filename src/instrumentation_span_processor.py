@@ -29,7 +29,6 @@ from opentelemetry.trace import Span
 _INSTRUMENTORS = {
     "agentframework": "microsoft-agents-a365-observability-extensions-agent-framework",
     "openai": "microsoft-agents-a365-observability-extensions-openai",
-    "semantic_kernel": "microsoft-agents-a365-observability-extensions-semantic-kernel",
     "langchain": "microsoft-agents-a365-observability-extensions-langchain",
 }
 

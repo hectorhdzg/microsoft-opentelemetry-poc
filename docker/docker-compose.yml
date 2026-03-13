@@ -1,0 +1,31 @@
+# OTLP stack for local development
+# Starts an OpenTelemetry Collector and Jaeger for trace visualization.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Jaeger UI:  http://localhost:16686
+# OTLP HTTP:  http://localhost:4318  (the agent sends traces here)
+# OTLP gRPC:  http://localhost:4317
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    container_name: otel-collector
+    command: ["--config", "/etc/otelcol/config.yml"]
+    volumes:
+      - ./otel-collector-config.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/jaeger:2.4.0
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4319:4318"   # Jaeger's own OTLP (mapped to 4319 to avoid conflict)
