@@ -16,6 +16,9 @@ exporters:
     tls:
       insecure: true
 
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
   debug:
     verbosity: basic
 
@@ -28,7 +31,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [prometheus, debug]
     logs:
       receivers: [otlp]
       processors: [batch]

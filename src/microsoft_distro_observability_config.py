@@ -67,7 +67,9 @@ def setup_observability() -> bool:
     """
     try:
         from microsoft.opentelemetry import configure_microsoft_opentelemetry
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor, ConsoleSpanExporter
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.trace import get_tracer_provider
         from instrumentation_span_processor import InstrumentationSpanProcessor
 
         # All A365 instrumentors we're requesting
@@ -77,23 +79,44 @@ def setup_observability() -> bool:
             enabled_instrumentors=enabled,
         )
 
+        enable_otlp = os.getenv("ENABLE_OTLP_EXPORTER", "false").lower() == "true"
+        otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+        # Build the OTLP metric reader so it's included in the MeterProvider
+        # at creation time. MeterProvider doesn't support adding readers after
+        # init, so we must pass it via metric_readers=[...].
+        otlp_metric_readers = []
+        if enable_otlp and otlp_endpoint:
+            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+            otlp_metric_readers.append(
+                PeriodicExportingMetricReader(
+                    OTLPMetricExporter(endpoint=f"{otlp_endpoint}/v1/metrics"),
+                    export_interval_millis=10000,
+                )
+            )
+            logger.info("OTLP metric reader prepared (endpoint=%s)", otlp_endpoint)
+
         configure_microsoft_opentelemetry(
             # --- Exporters ---
             # Azure Monitor (enabled automatically if APPLICATIONINSIGHTS_CONNECTION_STRING is set)
             # enable_azure_monitor_export=True,
 
-            # OTLP (set ENABLE_OTLP_EXPORTER=true and OTEL_EXPORTER_OTLP_ENDPOINT in env)
-            enable_otlp_export=os.getenv("ENABLE_OTLP_EXPORTER", "false").lower() == "true",
+            # OTLP — let the distro handle log/metric OTLP exporters
+            # (we add the trace exporter manually below for reliability)
+            enable_otlp_export=enable_otlp,
 
             # A365 cloud exporter
             enable_a365_export=os.getenv("ENABLE_A365_EXPORTER", "false").lower() == "true",
             a365_token_resolver=lambda agent_id, tenant_id: get_cached_agentic_token(tenant_id, agent_id),
 
-            # Console exporter + instrumentation metadata processor
-            span_processors=[
-                SimpleSpanProcessor(ConsoleSpanExporter()),
-                meta_processor,
-            ],
+            # Metadata processor only — we add the OTLP/Console processors
+            # directly to the SDK TracerProvider after setup.
+            span_processors=[meta_processor],
+
+            # OTLP metric reader — must be passed at init time
+            metric_readers=otlp_metric_readers,
 
             # --- A365 framework instrumentations (all enabled) ---
             enable_a365_agentframework_instrumentation=True,
@@ -105,6 +128,27 @@ def setup_observability() -> bool:
             # enable_genai_openai_agents_instrumentation=True,
             # enable_genai_langchain_instrumentation=True,
         )
+
+        # After configure_microsoft_opentelemetry, the global TracerProvider is
+        # set by Azure Monitor. Add the OTLP exporter directly to the SDK
+        # TracerProvider so spans flow to the collector.  The distro's own
+        # _add_otlp_exporters also adds one, but adding ours directly to the
+        # resolved provider guarantees it's on the real SDK TracerProvider.
+        tp = get_tracer_provider()
+        real_tp = getattr(tp, "_real_tracer_provider", tp)
+        if not isinstance(real_tp, TracerProvider):
+            real_tp = tp
+        if isinstance(real_tp, TracerProvider):
+            if enable_otlp and otlp_endpoint:
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter as HttpOTLPSpanExporter,
+                )
+                real_tp.add_span_processor(
+                    BatchSpanProcessor(HttpOTLPSpanExporter(endpoint=otlp_endpoint))
+                )
+                logger.info("OTLP span processor added to TracerProvider (endpoint=%s)", otlp_endpoint)
+        else:
+            logger.warning("TracerProvider is %s, cannot add OTLP exporter directly", type(real_tp))
 
         logger.info("Observability configured via microsoft-opentelemetry distro")
         return True
