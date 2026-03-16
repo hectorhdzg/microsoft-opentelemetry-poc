@@ -43,22 +43,15 @@ def setup_observability() -> bool:
     """One-call entry point to configure all observability via the distro."""
     try:
         from microsoft.opentelemetry import configure_microsoft_opentelemetry
-        from instrumentation_span_processor import InstrumentationSpanProcessor
+        from instrumentation_span_processor import configure_log_levels
+
+        configure_log_levels()
 
         configure_microsoft_opentelemetry(
             # --- Exporters (Azure Monitor auto-enabled via env var) ---
             enable_otlp_export=os.getenv("ENABLE_OTLP_EXPORTER", "false").lower() == "true",
             enable_a365_export=os.getenv("ENABLE_A365_EXPORTER", "false").lower() == "true",
             a365_token_resolver=lambda agent_id, tenant_id: get_cached_agentic_token(tenant_id, agent_id),
-
-            # --- Metadata span processor ---
-            span_processors=[
-                InstrumentationSpanProcessor(
-                    setup_approach="microsoft-distro",
-                    enabled_instrumentors=["agentframework", "openai", "langchain"],
-                ),
-            ],
-
             # --- A365 instrumentations ---
             enable_a365_agentframework_instrumentation=True,
             enable_a365_openai_instrumentation=True,

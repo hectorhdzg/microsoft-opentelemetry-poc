@@ -1,37 +1,29 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 """
-Observability Configuration — Single source of truth for all telemetry setup.
+Observability Configuration — A365 manual approach.
 
-This module centralizes:
-  1. Environment variables required for observability
-  2. Logging configuration for observability-related loggers
-  3. A365 Observability SDK configure() call (TracerProvider + exporter)
-  4. AgentFramework auto-instrumentation (span processor + enricher)
-  5. Token cache for A365 exporter authentication
+This is the "current way" of adding observability to an Agent Framework app
+using the A365 SDK directly. Compare with microsoft_distro_observability_config.py
+which does the same thing in a single function call via the microsoft-opentelemetry distro.
+
+Steps:
+  1. Suppress noisy SDK loggers
+  2. Call A365 configure() to set up TracerProvider + A365/console exporter
+  3. Wire up Azure Monitor (traces, metrics, logs)
+  4. Wire up OTLP export (traces, metrics, logs) for Jaeger/Prometheus
+  5. Instrument AgentFramework, OpenAI Agents SDK, LangChain — one by one
+  6. Attach metadata span processor
 
 Environment Variables:
-  ┌──────────────────────────────────────────┬────────────────────────────────────────────────┐
-  │ Variable                                 │ Purpose                                        │
-  ├──────────────────────────────────────────┼────────────────────────────────────────────────┤
-  │ ENABLE_INSTRUMENTATION=true              │ Turns on span creation in AgentFramework SDK   │
-  │ ENABLE_SENSITIVE_DATA=true               │ Include message content in spans                │
-  │ ENABLE_OBSERVABILITY=true                │ Master switch for observability                 │
-  │ ENABLE_A365_OBSERVABILITY_EXPORTER=false │ false → ConsoleSpanExporter (dev)               │
-  │                                          │ true  → A365 cloud exporter (requires auth)     │
-  │ OBSERVABILITY_SERVICE_NAME               │ Service name tag on all spans                   │
-  │ OBSERVABILITY_SERVICE_NAMESPACE           │ Service namespace tag on all spans              │
-  │ ENABLE_OTEL=true                         │ Enable OTEL logs in AgentFramework SDK          │
-  ├──────────────────────────────────────────┼────────────────────────────────────────────────┤
-  │ ** Required only when A365 exporter is enabled **                                         │
-  │ AUTH_HANDLER_NAME=AGENTIC                │ Enables agentic auth flow for token exchange    │
-  │ CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID     │ AAD app client ID               │
-  │ CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET │ AAD app client secret            │
-  │ CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID     │ AAD tenant ID                   │
-  │ CONNECTIONS__SERVICE_CONNECTION__SETTINGS__SCOPES       │ Required API scopes             │
-  │ CONNECTIONSMAP_0_SERVICEURL=*            │ Service URL mapping                             │
-  │ CONNECTIONSMAP_0_CONNECTION=SERVICE_CONNECTION │ Connection name mapping                   │
-  └──────────────────────────────────────────┴────────────────────────────────────────────────┘
+  ENABLE_INSTRUMENTATION=true                        — Turns on span creation in AgentFramework SDK
+  ENABLE_SENSITIVE_DATA=true                         — Include message content in spans
+  APPLICATIONINSIGHTS_CONNECTION_STRING              — Azure Monitor / App Insights
+  ENABLE_OTLP_EXPORTER=true                         — Send telemetry via OTLP
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318  — OTLP collector endpoint
+  ENABLE_A365_EXPORTER=true                          — A365 cloud backend
+  OBSERVABILITY_SERVICE_NAME                         — Service name tag on all spans
+  OBSERVABILITY_SERVICE_NAMESPACE                    — Service namespace tag on all spans
 """
 
 import logging
@@ -45,172 +37,170 @@ logger = logging.getLogger(__name__)
 
 from token_cache import cache_agentic_token, get_cached_agentic_token  # noqa: F401
 
-# =============================================================================
-# 1. LOGGING CONFIGURATION
-# =============================================================================
 
-def _configure_loggers() -> None:
-    """Set log levels for observability and agents SDK loggers."""
+def setup_observability() -> bool:
+    """
+    One-call entry point — configure all observability the "manual" way.
+
+    Call once during application startup, before the agent is created.
+    """
+
+    # ── 1. Suppress noisy loggers ────────────────────────────────────────
+    for name in (
+        "azure.core.pipeline.policies.http_logging_policy",
+        "azure.monitor.opentelemetry",
+        "azure.monitor.opentelemetry.exporter",
+        "azure.identity",
+        "opentelemetry.exporter.otlp",
+        "opentelemetry.exporter.otlp.proto.http._log_exporter",
+        "urllib3.connectionpool",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger("opentelemetry.exporter.otlp.proto.http._log_exporter").setLevel(logging.CRITICAL)
     logging.getLogger("microsoft_agents_a365.observability").setLevel(logging.INFO)
-
     ms_agents_logger = logging.getLogger("microsoft_agents")
     ms_agents_logger.addHandler(logging.StreamHandler())
     ms_agents_logger.setLevel(logging.INFO)
 
-
-# =============================================================================
-# 3. A365 OBSERVABILITY SDK — configure()
-# =============================================================================
-
-def _configure_a365_observability() -> bool:
-    """
-    Call the A365 observability SDK ``configure()`` to set up the TracerProvider
-    and attach the appropriate exporter.
-
-    When ENABLE_A365_OBSERVABILITY_EXPORTER=true **and** a token_resolver is
-    available, spans are sent to the A365 cloud backend.
-    Otherwise, spans are printed to the console via ConsoleSpanExporter.
-    """
+    # ── 2. A365 TracerProvider + exporter ────────────────────────────────
     from microsoft_agents_a365.observability.core.config import configure
 
-    service_name = os.getenv("OBSERVABILITY_SERVICE_NAME", "agent-framework-sample")
-    service_namespace = os.getenv("OBSERVABILITY_SERVICE_NAMESPACE", "agent-framework.samples")
-
-    return configure(
-        service_name=service_name,
-        service_namespace=service_namespace,
+    configured = configure(
+        service_name=os.getenv("OBSERVABILITY_SERVICE_NAME", "agent-framework-sample"),
+        service_namespace=os.getenv("OBSERVABILITY_SERVICE_NAMESPACE", "agent-framework.samples"),
         token_resolver=lambda agent_id, tenant_id: get_cached_agentic_token(tenant_id, agent_id),
     )
-
-
-# =============================================================================
-# 4. AGENTFRAMEWORK AUTO-INSTRUMENTATION
-# =============================================================================
-
-def _instrument_agentframework() -> bool:
-    """
-    Attach the AgentFramework span processor and enricher so that every
-    Agent.invoke() call produces OpenTelemetry spans automatically.
-
-    Returns True if instrumentation succeeded.
-    """
-    try:
-        from microsoft_agents_a365.observability.extensions.agentframework.trace_instrumentor import (
-            AgentFrameworkInstrumentor,
-        )
-
-        AgentFrameworkInstrumentor().instrument(skip_dep_check=True)
-        logger.info("AgentFramework auto-instrumentation enabled")
-        return True
-    except Exception as e:
-        logger.warning("Failed to enable AgentFramework instrumentation: %s", e)
-        return False
-
-
-# =============================================================================
-# 5. OPENAI AGENTS SDK INSTRUMENTATION
-# =============================================================================
-
-def _instrument_openai_agents() -> bool:
-    """
-    Attach the OpenAI Agents SDK trace processor so that spans from the
-    OpenAI Agents SDK are forwarded into the A365 tracing pipeline.
-
-    Package: microsoft-agents-a365-observability-extensions-openai
-    """
-    try:
-        from microsoft_agents_a365.observability.extensions.openai.trace_instrumentor import (
-            OpenAIAgentsTraceInstrumentor,
-        )
-
-        OpenAIAgentsTraceInstrumentor().instrument(skip_dep_check=True)
-        logger.info("OpenAI Agents SDK auto-instrumentation enabled")
-        return True
-    except Exception as e:
-        logger.warning("Failed to enable OpenAI Agents SDK instrumentation: %s", e)
-        return False
-
-
-# =============================================================================
-# 6. LANGCHAIN INSTRUMENTATION
-# =============================================================================
-
-def _instrument_langchain() -> bool:
-    """
-    Attach the LangChain tracer so that every LangChain run (chains, agents,
-    LLM calls, tool calls) produces spans in the A365 pipeline.
-
-    Note: CustomLangChainInstrumentor calls instrument() inside __init__,
-    so we just need to instantiate it.
-
-    Package: microsoft-agents-a365-observability-extensions-langchain
-    """
-    try:
-        from microsoft_agents_a365.observability.extensions.langchain.tracer_instrumentor import (
-            CustomLangChainInstrumentor,
-        )
-
-        CustomLangChainInstrumentor()  # instrument() is called in __init__
-        logger.info("LangChain auto-instrumentation enabled")
-        return True
-    except Exception as e:
-        logger.warning("Failed to enable LangChain instrumentation: %s", e)
-        return False
-
-
-# =============================================================================
-# 8. PUBLIC API — call once at startup
-# =============================================================================
-
-def setup_observability() -> bool:
-    """
-    One-call entry point to configure all observability.
-
-    Call this **once** during application startup, before the agent is created.
-    It will:
-      1. Configure loggers
-      2. Set up the TracerProvider + exporter (console or A365)
-      3. Attach AgentFramework auto-instrumentation
-      4. Attach OpenAI Agents SDK instrumentation
-      5. Attach LangChain instrumentation
-
-    Returns True if configure and at least AgentFramework instrumentation succeeded.
-    """
-    _configure_loggers()
-
-    configured = _configure_a365_observability()
     if not configured:
         logger.error("A365 observability configure() failed")
         return False
-    logger.info("A365 observability configured (TracerProvider + exporter ready)")
 
-    # Instrument all supported frameworks
-    results = {
-        "AgentFramework": _instrument_agentframework(),
-        "OpenAI Agents":  _instrument_openai_agents(),
-        "LangChain":       _instrument_langchain(),
-    }
-
-    # Map display names → processor keys
-    _key_map = {
-        "AgentFramework": "agentframework",
-        "OpenAI Agents": "openai",
-        "LangChain": "langchain",
-    }
-    enabled = [_key_map[name] for name, ok in results.items() if ok]
-
-    # Attach shared InstrumentationSpanProcessor
-    from instrumentation_span_processor import InstrumentationSpanProcessor
+    # ── 3. Azure Monitor ─────────────────────────────────────────────────
+    #    Manually set up Azure Monitor trace, metric, and log exporters.
+    #    The distro does this with one flag; here we need to wire each one.
     from opentelemetry.trace import get_tracer_provider
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    proc = InstrumentationSpanProcessor(setup_approach="a365-manual", enabled_instrumentors=enabled)
     tp = get_tracer_provider()
-    if hasattr(tp, "add_span_processor"):
-        tp.add_span_processor(proc)
-        logger.info("InstrumentationSpanProcessor attached")
+    real_tp = getattr(tp, "_real_tracer_provider", tp)
+    if not isinstance(real_tp, TracerProvider):
+        real_tp = tp
 
-    exporter = "A365" if os.getenv("ENABLE_A365_OBSERVABILITY_EXPORTER", "false").lower() == "true" else "Console"
-    status = ", ".join(f"{name}: {'on' if ok else 'off'}" for name, ok in results.items())
-    logger.info("Observability setup complete — exporter: %s | %s", exporter, status)
+    connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if connection_string:
+        from azure.monitor.opentelemetry.exporter import (
+            AzureMonitorTraceExporter,
+            AzureMonitorMetricExporter,
+            AzureMonitorLogExporter,
+        )
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.metrics import set_meter_provider
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry._logs import set_logger_provider
 
-    return configured and results["AgentFramework"]
+        # Traces → App Insights
+        if isinstance(real_tp, TracerProvider):
+            real_tp.add_span_processor(
+                BatchSpanProcessor(AzureMonitorTraceExporter(connection_string=connection_string))
+            )
+
+        # Metrics → App Insights
+        az_metric_reader = PeriodicExportingMetricReader(
+            AzureMonitorMetricExporter(connection_string=connection_string),
+            export_interval_millis=60000,
+        )
+        meter_provider = MeterProvider(metric_readers=[az_metric_reader])
+        set_meter_provider(meter_provider)
+
+        # Logs → App Insights
+        az_log_provider = LoggerProvider()
+        az_log_provider.add_log_record_processor(
+            BatchLogRecordProcessor(AzureMonitorLogExporter(connection_string=connection_string))
+        )
+        set_logger_provider(az_log_provider)
+
+        logger.info("Azure Monitor exporters added (traces + metrics + logs)")
+
+    # ── 4. OTLP export (Jaeger / Prometheus / Collector) ─────────────────
+    #    Again, the distro handles this with enable_otlp_export=True.
+    #    Manually we need to create each exporter and attach it.
+    enable_otlp = os.getenv("ENABLE_OTLP_EXPORTER", "false").lower() == "true"
+    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+    if enable_otlp and otlp_endpoint:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.metrics import get_meter_provider, set_meter_provider
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
+
+        # Traces → OTLP
+        if isinstance(real_tp, TracerProvider):
+            real_tp.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otlp_endpoint}/v1/traces"))
+            )
+
+        # Metrics → OTLP
+        otlp_metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=f"{otlp_endpoint}/v1/metrics"),
+            export_interval_millis=10000,
+        )
+        existing_mp = get_meter_provider()
+        if not isinstance(existing_mp, MeterProvider):
+            # No SDK MeterProvider yet — create one with the OTLP reader
+            set_meter_provider(MeterProvider(metric_readers=[otlp_metric_reader]))
+        # If Azure Monitor already created one, we can't add readers after init —
+        # we'd need to recreate the MeterProvider with both readers.
+        # This is one of the pain points the distro solves.
+
+        # Logs → OTLP
+        existing_lp = get_logger_provider()
+        if isinstance(existing_lp, LoggerProvider):
+            existing_lp.add_log_record_processor(
+                BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{otlp_endpoint}/v1/logs"))
+            )
+        else:
+            otlp_log_provider = LoggerProvider()
+            otlp_log_provider.add_log_record_processor(
+                BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{otlp_endpoint}/v1/logs"))
+            )
+            set_logger_provider(otlp_log_provider)
+
+        logger.info("OTLP exporters added (traces + metrics + logs → %s)", otlp_endpoint)
+
+    # ── 5. Instrument frameworks ─────────────────────────────────────────
+    #    Each framework needs its own instrumentor import and .instrument() call.
+    #    The distro enables all of these with boolean flags.
+    from microsoft_agents_a365.observability.extensions.agentframework.trace_instrumentor import (
+        AgentFrameworkInstrumentor,
+    )
+    from microsoft_agents_a365.observability.extensions.openai.trace_instrumentor import (
+        OpenAIAgentsTraceInstrumentor,
+    )
+    from microsoft_agents_a365.observability.extensions.langchain.tracer_instrumentor import (
+        CustomLangChainInstrumentor,
+    )
+
+    AgentFrameworkInstrumentor().instrument(skip_dep_check=True)
+    OpenAIAgentsTraceInstrumentor().instrument(skip_dep_check=True)
+    CustomLangChainInstrumentor()  # instrument() is called in __init__
+
+    # ── 6. Metadata span processor ──────────────────────────────────────
+    from instrumentation_span_processor import InstrumentationSpanProcessor
+
+    if isinstance(real_tp, TracerProvider):
+        real_tp.add_span_processor(
+            InstrumentationSpanProcessor(
+                setup_approach="a365-manual",
+                enabled_instrumentors=["agentframework", "openai", "langchain"],
+            )
+        )
+
+    logger.info("Observability configured (A365 manual approach)")
+    return True

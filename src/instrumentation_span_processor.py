@@ -18,6 +18,7 @@ Attributes added to each span on start:
 from __future__ import annotations
 
 import importlib.metadata as _md
+import logging
 from typing import Optional, Sequence
 
 from opentelemetry.context import Context
@@ -96,3 +97,19 @@ class InstrumentationSpanProcessor(SpanProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
+
+
+def configure_log_levels():
+    """Suppress noisy Azure SDK / OTel exporter logs to WARNING+."""
+    for name in (
+        "azure.core.pipeline.policies.http_logging_policy",
+        "azure.monitor.opentelemetry",
+        "azure.monitor.opentelemetry.exporter",
+        "azure.identity",
+        "opentelemetry.exporter.otlp",
+        "opentelemetry.exporter.otlp.proto.http._log_exporter",
+        "urllib3.connectionpool",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    # OTLP log exporter always 404s against Jaeger (no log endpoint)
+    logging.getLogger("opentelemetry.exporter.otlp.proto.http._log_exporter").setLevel(logging.CRITICAL)
