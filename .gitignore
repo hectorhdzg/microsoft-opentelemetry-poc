@@ -1,6 +1,7 @@
 # Environment / secrets
 .env
 !.env.template
+a365.generated.config.json
 
 # Python
 __pycache__/
@@ -25,3 +26,8 @@ Thumbs.db
 
 # Dev tools
 devTools/
+
+# Temporary / debug artifacts
+agent-logs*/
+endpoint-result.txt
+a365.config.json

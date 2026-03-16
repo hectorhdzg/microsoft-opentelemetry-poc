@@ -47,11 +47,8 @@ dependencies = [
     "microsoft_agents_a365_runtime >= 0.1.0.dev0",
     "microsoft_agents_a365_notifications >= 0.1.0.dev0",
 
-    # Microsoft OpenTelemetry Distro (vendored wheel — installed with --no-deps to skip semantic-kernel)
-    # Run: pip install --no-deps vendor/microsoft_opentelemetry-0.1.0b1-py3-none-any.whl
-    # "microsoft-opentelemetry @ file:vendor/microsoft_opentelemetry-0.1.0b1-py3-none-any.whl",
-
-    # Distro dependencies we actually use (manually listed since we skip the wheel's own deps)
+    # Microsoft OpenTelemetry Distro — source lives in microsoft/opentelemetry/
+    # These are the runtime dependencies the distro needs:
     "opentelemetry-sdk==1.39.0",
     "opentelemetry-api==1.39.0",
     "azure-monitor-opentelemetry==1.8.6",
@@ -98,4 +95,4 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src", "microsoft"]

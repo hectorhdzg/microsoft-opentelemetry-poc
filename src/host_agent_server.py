@@ -81,11 +81,14 @@ class GenericAgentHost:
                 f"Agent class {agent_class.__name__} must inherit from AgentInterface"
             )
 
-        # Auth handler name can be configured via environment
-        # Defaults to empty (no auth handler) - set AUTH_HANDLER_NAME=AGENTIC for production agentic auth
+        # Auth handler name - used for token exchange (observability tokens)
+        # Set AUTH_HANDLER_NAME=AGENTIC to enable token exchange
         self.auth_handler_name = os.getenv("AUTH_HANDLER_NAME", "") or None
+        # Whether to require auth handlers on message routes (SSO flow)
+        # Set to "true" for real A365 clients (Teams), "false" for Playground
+        self.require_auth_on_routes = os.getenv("REQUIRE_AUTH_ON_ROUTES", "false").lower() == "true"
         if self.auth_handler_name:
-            logger.info(f"🔐 Using auth handler: {self.auth_handler_name}")
+            logger.info(f"🔐 Using auth handler: {self.auth_handler_name} (routes require SSO: {self.require_auth_on_routes})")
         else:
             logger.info("🔓 No auth handler configured (AUTH_HANDLER_NAME not set)")
 
@@ -114,33 +117,63 @@ class GenericAgentHost:
     async def _setup_observability_token(
         self, context: TurnContext, tenant_id: str, agent_id: str
     ):
-        # Only attempt token exchange when auth handler is configured
-        if not self.auth_handler_name:
-            logger.debug("Skipping observability token exchange (no auth handler)")
+        # Skip if token is already cached
+        if get_cached_agentic_token(tenant_id, agent_id):
             return
-            
-        try:
-            logger.info(
-                f"🔐 Attempting token exchange for observability... "
-                f"(tenant_id={tenant_id}, agent_id={agent_id})"
-            )
-            exaau_token = await self.agent_app.auth.exchange_token(
-                context,
-                scopes=get_observability_authentication_scope(),
-                auth_handler_id=self.auth_handler_name,
-            )
-            cache_agentic_token(tenant_id, agent_id, exaau_token.token)
-            logger.info(
-                f"✅ Token exchange successful "
-                f"(tenant_id={tenant_id}, agent_id={agent_id})"
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to cache observability token: {e}")
+
+        # Try SSO token exchange first (works with real A365 clients like Teams)
+        if self.auth_handler_name:
+            try:
+                logger.info(
+                    f"🔐 Attempting token exchange for observability... "
+                    f"(tenant_id={tenant_id}, agent_id={agent_id})"
+                )
+                exaau_token = await self.agent_app.auth.exchange_token(
+                    context,
+                    scopes=get_observability_authentication_scope(),
+                    auth_handler_id=self.auth_handler_name,
+                )
+                cache_agentic_token(tenant_id, agent_id, exaau_token.token)
+                logger.info(
+                    f"✅ Token exchange successful "
+                    f"(tenant_id={tenant_id}, agent_id={agent_id})"
+                )
+                return
+            except Exception as e:
+                logger.warning(f"⚠️ Token exchange failed: {e}")
+
+        # Fallback: acquire token via client credentials (S2S)
+        client_id = os.getenv("CLIENT_ID")
+        client_secret = os.getenv("CLIENT_SECRET")
+        cred_tenant = os.getenv("TENANT_ID")
+        if client_id and client_secret and cred_tenant:
+            try:
+                import msal
+                app = msal.ConfidentialClientApplication(
+                    client_id,
+                    authority=f"https://login.microsoftonline.com/{cred_tenant}",
+                    client_credential=client_secret,
+                )
+                scopes = get_observability_authentication_scope()
+                result = app.acquire_token_for_client(scopes=scopes)
+                if "access_token" in result:
+                    cache_agentic_token(tenant_id, agent_id, result["access_token"])
+                    logger.info(
+                        f"✅ Client credentials token acquired for observability "
+                        f"(tenant_id={tenant_id}, agent_id={agent_id})"
+                    )
+                else:
+                    logger.warning(
+                        f"⚠️ Client credentials token failed: "
+                        f"{result.get('error')}: {result.get('error_description')}"
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ Client credentials fallback failed: {e}")
 
     async def _validate_agent_and_setup_context(self, context: TurnContext):
         logger.info("🔍 Validating agent and setting up context...")
-        tenant_id = context.activity.recipient.tenant_id
-        agent_id = context.activity.recipient.agentic_app_id
+        tenant_id = context.activity.recipient.tenant_id or os.getenv("TENANT_ID")
+        agent_id = context.activity.recipient.agentic_app_id or os.getenv("CLIENT_ID")
         logger.info(f"🔍 tenant_id={tenant_id}, agent_id={agent_id}")
 
         if not self.agent_instance:
@@ -154,8 +187,9 @@ class GenericAgentHost:
     # --- Handlers (Messages & Notifications) ---
     def _setup_handlers(self):
         """Setup message and notification handlers"""
-        # Configure auth handlers - only required when auth_handler_name is set
-        handler_config = {"auth_handlers": [self.auth_handler_name]} if self.auth_handler_name else {}
+        # Only attach auth handlers to routes when explicitly required (real A365 clients like Teams)
+        # Playground can't complete the SSO flow, so routes should not require it
+        handler_config = {"auth_handlers": [self.auth_handler_name]} if (self.auth_handler_name and self.require_auth_on_routes) else {}
 
         async def help_handler(context: TurnContext, _: TurnState):
             await context.send_activity(
@@ -313,6 +347,10 @@ class GenericAgentHost:
         desired_port = int(environ.get("PORT", 3978))
         port = desired_port
 
+        # In Azure (non-local), bind to 0.0.0.0 so the health probe can reach us
+        is_azure = environ.get("WEBSITE_INSTANCE_ID") is not None
+        bind_host = "0.0.0.0" if is_azure else "localhost"
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
             if s.connect_ex(("127.0.0.1", desired_port)) == 0:
@@ -322,12 +360,12 @@ class GenericAgentHost:
         print(f"🏢 {self.agent_class.__name__}")
         print("=" * 80)
         print(f"🔒 Auth: {'Enabled' if auth_configuration else 'Anonymous'}")
-        print(f"🚀 Server: localhost:{port}")
-        print(f"📚 Endpoint: http://localhost:{port}/api/messages")
-        print(f"❤️  Health: http://localhost:{port}/api/health\n")
+        print(f"🚀 Server: {bind_host}:{port}")
+        print(f"📚 Endpoint: http://{bind_host}:{port}/api/messages")
+        print(f"❤️  Health: http://{bind_host}:{port}/api/health\n")
 
         try:
-            run_app(app, host="localhost", port=port, handle_signals=True)
+            run_app(app, host=bind_host, port=port, handle_signals=True)
         except KeyboardInterrupt:
             print("\n👋 Server stopped")
 
