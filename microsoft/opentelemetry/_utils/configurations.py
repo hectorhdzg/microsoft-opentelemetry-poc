@@ -374,10 +374,13 @@ def _default_exporter_options(configurations):
     configurations.setdefault(OTLP_PROTOCOL_ARG, environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"))
     configurations.setdefault(OTLP_HEADERS_ARG, environ.get("OTEL_EXPORTER_OTLP_HEADERS"))
 
-    # A365 exporter: check environment variable or kwarg
+    # A365 exporter: auto-enable when a365_token_resolver is provided or
+    # when ENABLE_A365_EXPORTER=true env var is set
+    has_a365_token_resolver = A365_TOKEN_RESOLVER_ARG in configurations and configurations[A365_TOKEN_RESOLVER_ARG] is not None
     if ENABLE_A365_EXPORTER_ARG not in configurations:
         configurations[ENABLE_A365_EXPORTER_ARG] = (
-            environ.get("ENABLE_A365_EXPORTER", "").lower() == "true"
+            has_a365_token_resolver
+            or environ.get("ENABLE_A365_EXPORTER", "").lower() == "true"
         )
     configurations.setdefault(A365_TOKEN_RESOLVER_ARG, None)
     configurations.setdefault(A365_CLUSTER_CATEGORY_ARG, environ.get("A365_CLUSTER_CATEGORY", "prod"))

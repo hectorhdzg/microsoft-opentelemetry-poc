@@ -8,6 +8,9 @@ This project is a **proof of concept** for the [`microsoft-opentelemetry`](https
 
 It uses a real Agent Framework agent as the workload to demonstrate the difference between configuring observability manually vs. using the distro.
 
+> **Note:** The distro prototype source code lives in [`microsoft/opentelemetry/`](microsoft/opentelemetry/) within this repo.
+> The upstream package source is at [hectorhdzg/azure-sdk-for-python](https://github.com/hectorhdzg/azure-sdk-for-python/tree/hectorhdzg/microsoftpoc/sdk/monitor/microsoft-opentelemetry).
+
 > For project structure, setup instructions, and environment variables, see [docs/SETUP.md](docs/SETUP.md).
 > For design considerations, trade-offs, and multi-language support, see [docs/considerations.md](docs/considerations.md).
 
@@ -37,7 +40,7 @@ The distro **converges these efforts into a single codebase** — shared instrum
 
 ### 3. Less Boilerplate for Developers
 
-As a direct result of centralization, developers go from **~250 lines of manual setup** (see [`src/observability_config.py`](src/observability_config.py)) — creating tracer providers, initializing 4+ instrumentors individually, managing token caches, handling dependency checks — down to **~60 lines** with a single function call (see [`src/microsoft_distro_observability_config.py`](src/microsoft_distro_observability_config.py)).
+As a direct result of centralization, developers go from **~170 lines of manual setup** (see [`src/observability_config.py`](src/observability_config.py)) — creating tracer providers, initializing instrumentors individually, managing token caches, handling dependency checks — down to **~56 lines** with a single function call (see [`src/microsoft_distro_observability_config.py`](src/microsoft_distro_observability_config.py)).
 
 ## The Solution
 

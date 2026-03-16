@@ -72,6 +72,7 @@ from microsoft.opentelemetry._utils.instrumentation import (
 
 _logger = getLogger(__name__)
 
+
 # Keys that are specific to microsoft-opentelemetry and should not be
 # forwarded to configure_azure_monitor()
 _MICROSOFT_OTEL_ONLY_KEYS = frozenset({
@@ -144,6 +145,12 @@ def configure_microsoft_opentelemetry(**kwargs) -> None:
     enable_otlp = configurations.get(ENABLE_OTLP_EXPORTER_ARG, False)
     enable_a365 = configurations.get(ENABLE_A365_EXPORTER_ARG, False)
 
+    # --- Pre-step: If OTLP is enabled, prepare OTLP metric reader ---
+    # MeterProvider doesn't support adding readers after creation, so OTLP
+    # metric readers must be in configurations before provider setup.
+    if enable_otlp and not configurations.get(DISABLE_METRICS_ARG):
+        _prepare_otlp_metric_reader(configurations)
+
     # --- Step 1: If Azure Monitor is enabled, delegate to configure_azure_monitor() ---
     if enable_azure_monitor:
         _setup_azure_monitor(configurations)
@@ -152,7 +159,7 @@ def configure_microsoft_opentelemetry(**kwargs) -> None:
     if not enable_azure_monitor:
         _setup_standalone_providers(configurations)
 
-    # --- Step 3: Add OTLP exporters to existing providers ---
+    # --- Step 3: Add OTLP trace & log exporters to existing providers ---
     if enable_otlp:
         _add_otlp_exporters(configurations)
 
@@ -313,11 +320,62 @@ def _setup_standalone_metrics(configurations: Dict[str, ConfigurationValue]):
     set_meter_provider(meter_provider)
 
 
+def _get_sdk_tracer_provider() -> Optional[TracerProvider]:
+    """Get the SDK TracerProvider, unwrapping Azure Monitor's proxy if needed."""
+    tp = get_tracer_provider()
+    real_tp = getattr(tp, "_real_tracer_provider", tp)
+    if isinstance(real_tp, TracerProvider):
+        return real_tp
+    if isinstance(tp, TracerProvider):
+        return tp
+    return None
+
+
+def _prepare_otlp_metric_reader(configurations: Dict[str, ConfigurationValue]):
+    """Create OTLP metric reader and add it to the metric_readers list.
+
+    Called before provider creation because MeterProvider requires all readers
+    at init time.
+    """
+    otlp_endpoint = configurations.get(OTLP_ENDPOINT_ARG)
+    otlp_protocol = configurations.get(OTLP_PROTOCOL_ARG, "http/protobuf")
+
+    try:
+        if otlp_protocol == "grpc":
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter as GrpcOTLPMetricExporter,
+            )
+            otlp_metric_exporter = GrpcOTLPMetricExporter(
+                **({"endpoint": otlp_endpoint} if otlp_endpoint else {})
+            )
+        else:
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter as HttpOTLPMetricExporter,
+            )
+            kwargs: Dict[str, Any] = {}
+            if otlp_endpoint:
+                kwargs["endpoint"] = f"{otlp_endpoint}/v1/metrics"
+            otlp_metric_exporter = HttpOTLPMetricExporter(**kwargs)
+
+        reader = PeriodicExportingMetricReader(otlp_metric_exporter, export_interval_millis=10000)
+        readers: list = configurations.get(METRIC_READERS_ARG, [])  # type: ignore
+        readers.append(reader)
+        configurations[METRIC_READERS_ARG] = readers
+        _logger.info("OTLP metric reader added (protocol=%s)", otlp_protocol)
+    except ImportError:
+        _logger.warning("OTLP metric exporter packages not installed")
+    except Exception as ex:
+        _logger.warning("Failed to create OTLP metric reader: %s", ex)
+
+
 def _add_otlp_exporters(configurations: Dict[str, ConfigurationValue]):
-    """Add OTLP exporters to the existing providers (set up by Azure Monitor or standalone)."""
+    """Add OTLP trace and log exporters to the existing providers.
+
+    OTLP metrics are handled by _prepare_otlp_metric_reader() before provider
+    creation, since MeterProvider requires all readers at init time.
+    """
     disable_tracing = configurations[DISABLE_TRACING_ARG]
     disable_logging = configurations[DISABLE_LOGGING_ARG]
-    disable_metrics = configurations[DISABLE_METRICS_ARG]
 
     otlp_kwargs: Dict[str, Any] = {}
     otlp_endpoint = configurations.get(OTLP_ENDPOINT_ARG)
@@ -339,8 +397,8 @@ def _add_otlp_exporters(configurations: Dict[str, ConfigurationValue]):
                 )
                 otlp_trace_exporter = HttpOTLPSpanExporter(**otlp_kwargs)
 
-            tracer_provider = get_tracer_provider()
-            if isinstance(tracer_provider, TracerProvider):
+            tracer_provider = _get_sdk_tracer_provider()
+            if tracer_provider is not None:
                 tracer_provider.add_span_processor(BatchSpanProcessor(otlp_trace_exporter))
                 _logger.info("OTLP trace exporter added (protocol=%s)", otlp_protocol)
             else:
@@ -382,40 +440,7 @@ def _add_otlp_exporters(configurations: Dict[str, ConfigurationValue]):
         except Exception as ex:
             _logger.warning("Failed to configure OTLP log exporter: %s", ex)
 
-    # --- OTLP Metric Exporter ---
-    if not disable_metrics:
-        try:
-            if otlp_protocol == "grpc":
-                from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                    OTLPMetricExporter as GrpcOTLPMetricExporter,
-                )
-                otlp_metric_exporter = GrpcOTLPMetricExporter(**otlp_kwargs)
-            else:
-                from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
-                    OTLPMetricExporter as HttpOTLPMetricExporter,
-                )
-                otlp_metric_exporter = HttpOTLPMetricExporter(**otlp_kwargs)
-
-            meter_provider = get_meter_provider()
-            if isinstance(meter_provider, MeterProvider):
-                reader = PeriodicExportingMetricReader(otlp_metric_exporter)
-                # MeterProvider doesn't support adding readers after creation,
-                # so we log a warning if Azure Monitor already created the provider
-                _logger.info("OTLP metric exporter configured (protocol=%s)", otlp_protocol)
-                # For standalone mode, readers are added before MeterProvider creation.
-                # When Azure Monitor is active, metrics go through Azure Monitor's reader;
-                # the OTLP metric reader needs to be configured before provider creation.
-                _logger.debug(
-                    "Note: OTLP metric reader works best when Azure Monitor is disabled. "
-                    "When Azure Monitor is active, consider passing metric_readers=[...] "
-                    "to include OTLP reader at provider creation time."
-                )
-            else:
-                _logger.warning("Cannot add OTLP metric exporter: MeterProvider is not an SDK MeterProvider")
-        except ImportError:
-            _logger.warning("OTLP metric exporter packages not installed")
-        except Exception as ex:
-            _logger.warning("Failed to configure OTLP metric exporter: %s", ex)
+    # OTLP metrics handled by _prepare_otlp_metric_reader() before provider creation.
 
 
 def _add_a365_exporter(configurations: Dict[str, ConfigurationValue]):
@@ -457,8 +482,8 @@ def _add_a365_exporter(configurations: Dict[str, ConfigurationValue]):
                 "max_export_batch_size": a365_options.max_export_batch_size,
             }
 
-        tracer_provider = get_tracer_provider()
-        if isinstance(tracer_provider, TracerProvider):
+        tracer_provider = _get_sdk_tracer_provider()
+        if tracer_provider is not None:
             a365_bsp = _EnrichingBatchSpanProcessor(a365_exporter, **batch_kwargs)
             tracer_provider.add_span_processor(a365_bsp)
             _logger.info("Agent365 trace exporter added to existing TracerProvider")

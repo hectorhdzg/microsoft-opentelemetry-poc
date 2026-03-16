@@ -18,7 +18,7 @@
 │   ├── instrumentation_span_processor.py    # Shared SpanProcessor for metadata
 │   ├── token_cache.py                       # Token cache for A365 exporter auth
 │   └── ToolingManifest.json                 # MCP tool manifest
-├── vendor/                                  # Vendored microsoft-opentelemetry wheel
+├── microsoft/opentelemetry/                 # Microsoft OpenTelemetry Distro prototype source
 ├── docker/                                  # Local OTLP stack (OTel Collector + Jaeger)
 │   ├── docker-compose.yml                   # Starts collector and Jaeger
 │   └── otel-collector-config.yml            # Collector pipeline config

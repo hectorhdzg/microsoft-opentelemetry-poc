@@ -487,11 +487,10 @@ The code detects Azure via the `WEBSITE_INSTANCE_ID` environment variable.
 
 ### OpenTelemetry distro wheel install fails on Azure
 
-**Symptom:** `microsoft-opentelemetry` wheel can't be installed from `vendor/` directory
-during Azure deployment.
+**Symptom:** `microsoft-opentelemetry` can't be found during Azure deployment.
 
-**Fix:** Copy the distro source into the project as `microsoft/opentelemetry/` and
-update `pyproject.toml` to include `"microsoft"` in the wheel packages:
+**Fix:** The distro source lives in `microsoft/opentelemetry/` within this repo.
+Ensure `pyproject.toml` includes it in the wheel packages:
 ```toml
 [tool.hatch.build.targets.wheel]
 packages = [".", "microsoft"]
@@ -520,6 +519,6 @@ agent-framework-core==1.0.0b251218
 | `manifest/manifest.json` | Teams/M365 app manifest | No (public app IDs only) |
 | `host_agent_server.py` | Bot server host with auth & observability | No |
 | `agent.py` | Agent logic | No |
-| `microsoft/opentelemetry/` | Vendored OpenTelemetry distro source | No |
+| `microsoft/opentelemetry/` | Microsoft OpenTelemetry Distro prototype source | No |
 | `microsoft_distro_observability_config.py` | Configures OTel + A365 exporter | No |
 | `token_cache.py` | In-memory cache for agentic tokens | No |
