@@ -1,5 +1,7 @@
 # Microsoft OpenTelemetry Distro — POC
 
+[![Video Walkthrough — Click to Watch](images/video-thumbnail.svg)](https://microsoft-my.sharepoint.com/:v:/p/hectorh/IQC5WgaY0tVKQbu4Du-T7NtRAS8MbVIVIIqMD7chKiIEtFE?e=gBdme3)
+
 ## Architecture
 
 ![Microsoft OTEL Distro Architecture](images/architecture.png)
