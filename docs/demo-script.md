@@ -20,20 +20,29 @@
 1. Today, observability for AI agents on Microsoft's platform is fragmented. Azure Monitor has its own SDK. Agent 365 has a completely separate observability stack. And OTLP, OpenAI, and LangChain each come with different instrumentation packages and different onboarding paths.
 2. Developers have to discover, install, and wire together pieces from multiple product teams just to get traces flowing. And internally, each team is solving the same problems independently, duplicating effort across the organization.
 
-### Scene 2 — The Proposed Solution
+### Scene 2 — The Proposal
 
-**Visual:** Split screen — left: `src/observability_config.py` scrolling through ~170 lines → right: `src/microsoft_distro_observability_config.py` showing ~56 lines. Zoom into the `configure_microsoft_opentelemetry()` call.
+**Visual:** Title slide — "Microsoft OpenTelemetry Distro" → architecture diagram showing one package connecting to Azure Monitor, A365, and OTLP
 
 **Clips:**
 
-1. On the left is the manual approach. About 170 lines. Multiple SDKs, multiple instrumentors, each wired separately. On the right is the same agent using the Microsoft OpenTelemetry Distro. About 56 lines. One function call that configures all exporters and instrumentations together.
-2. Azure Monitor, A365, OTLP, Agent Framework, OpenAI, LangChain. All configured through a single function. One package, one onboarding experience, instead of four.
+1. The proposal is a single Microsoft OpenTelemetry distribution, one package that handles all of this. Azure Monitor, Agent 365, and OTLP export, all configured through one function call. Instead of four separate SDKs, developers get one onboarding experience.
+2. It also handles instrumentations. Agent Framework, OpenAI, LangChain. The distro wires them up automatically. Less code for developers, less duplication across teams.
+
+### Scene 3 — What It Looks Like in Code
+
+**Visual:** Full screen `src/microsoft_distro_observability_config.py` → zoom into the `configure_microsoft_opentelemetry()` call and its parameters
+
+**Clips:**
+
+1. Here's what the distro approach looks like. One import, one function call. You pass in which exporters and instrumentations you want, and the distro handles the rest. No manual provider setup, no separate instrumentor initialization.
+2. Compare that to the manual approach, where you'd need separate SDK calls for A365, Azure Monitor, Agent Framework, OpenAI, and LangChain, each with its own imports and error handling.
 
 ---
 
 ## Part 2 — Live Telemetry Demo (~1 min)
 
-### Scene 3 — Playground Calling the Agent
+### Scene 4 — Playground Calling the Agent
 
 **Visual:** Open M365 Agents Playground → connect to `http://localhost:3978/api/messages` → send a message to the agent → show the agent responding
 
@@ -41,16 +50,16 @@
 
 1. Here's the agent running locally. We're using the M365 Agents Playground to send a message. The agent processes the request using Azure OpenAI, and we get a response back. Now let's look at the telemetry that was generated across all our backends.
 
-### Scene 4 — Azure Monitor: Traces, Metrics, Logs & Live Metrics
+### Scene 5 — Azure Monitor: Traces, Metrics, Logs & Live Metrics
 
 **Visual:** Switch to Azure Portal → Application Insights → Transaction search showing traces → drill into a trace to show spans → switch to Metrics blade → switch to Logs blade → switch to Live Metrics view showing real-time data
 
 **Clips:**
 
-1. In Application Insights, we can see the full trace. The incoming request, the agent processing, and the OpenAI calls, all with model names, token counts, and latency. We also have metrics, showing request rates and dependencies. And logs, captured alongside the traces.
+1. In Application Insights, we can see the full trace. The request, the agent processing, and the OpenAI calls, all with model names, token counts, and latency. We also have metrics, showing request rates and dependencies. And logs, captured alongside the traces.
 2. Here's Live Metrics. As we send more messages through the Playground, we can watch requests, failures, and dependencies update in real time. All of this came from the same single function call in the distro configuration.
 
-### Scene 5 — OTLP: Jaeger Traces & Prometheus Metrics
+### Scene 6 — OTLP: Jaeger Traces & Prometheus Metrics
 
 **Visual:** Switch to terminal showing `docker compose -f docker/docker-compose.yml up -d` → open browser to Jaeger UI at `http://localhost:16686` → search for traces → drill into a trace → switch to Prometheus UI showing metrics
 
@@ -58,7 +67,7 @@
 
 1. In parallel, the distro is also exporting to OTLP. We're running the OpenTelemetry Collector in Docker. In Jaeger, we can see the same traces, the same span hierarchy, the agent request flowing through OpenAI. And in Prometheus, we can query the metrics that the collector is exposing.
 
-### Scene 6 — Console Exporter
+### Scene 7 — Console Exporter
 
 **Visual:** Switch back to terminal where the agent is running → scroll to show console output with trace and span data printed in real time
 
@@ -66,7 +75,7 @@
 
 1. For local debugging, the console exporter prints trace data directly in the terminal. You can see span names, durations, attributes, and the parent-child relationships. No external tools needed, just run the agent and read the output.
 
-### Scene 7 — A365 Telemetry
+### Scene 8 — A365 Telemetry
 
 **Visual:** Switch to A365 telemetry view → show enriched spans with normalized attributes → highlight A365-specific metadata like agent ID and tenant ID
 
@@ -82,7 +91,7 @@
 
 **Clips:**
 
-1. One distro. Azure Monitor with traces, metrics, logs, and live metrics. OTLP with Jaeger and Prometheus. Console output for debugging. And A365 telemetry with enriched spans. All from a single function call. Less confusion for developers, less duplication across teams.
+1. One distro. Azure Monitor with traces, metrics, logs, and live metrics. All from a single function call. Less confusion for developers, less duplication across teams.
 
 ---
 
@@ -91,11 +100,12 @@
 | Scene | Clips | Approx. Duration |
 |-------|-------|-------------------|
 | 1 — The Current Issue | 2 | ~20 sec |
-| 2 — The Proposed Solution | 2 | ~20 sec |
-| 3 — Playground Calling the Agent | 1 | ~15 sec |
-| 4 — Azure Monitor (traces, metrics, logs, live metrics) | 2 | ~20 sec |
-| 5 — OTLP (Jaeger + Prometheus) | 1 | ~15 sec |
-| 6 — Console Exporter | 1 | ~10 sec |
-| 7 — A365 Telemetry | 1 | ~10 sec |
+| 2 — The Proposal | 2 | ~15 sec |
+| 3 — What It Looks Like in Code | 2 | ~20 sec |
+| 4 — Playground Calling the Agent | 1 | ~10 sec |
+| 5 — Azure Monitor (traces, metrics, logs, live metrics) | 2 | ~20 sec |
+| 6 — OTLP (Jaeger + Prometheus) | 1 | ~15 sec |
+| 7 — Console Exporter | 1 | ~10 sec |
+| 8 — A365 Telemetry | 1 | ~10 sec |
 | Closing | 1 | ~10 sec |
-| **Total** | **11** | **~2 min** |
+| **Total** | **13** | **~2.5 min** |

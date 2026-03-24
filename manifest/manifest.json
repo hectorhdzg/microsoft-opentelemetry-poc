@@ -1,9 +1,9 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/vdevPreview/MicrosoftTeams.schema.json",
-  "id": "a9cd647c-c40d-4f95-8195-11ad34d6c7b6",
+  "id": "1b4b1b62-4e1e-4643-bd66-6c3c7cc27809",
   "name": {
-    "short": "hectorhtestagentv2 Blueprint",
-    "full": "hectorhtestagentv2 Blueprint"
+    "short": "otel-poc Blueprint",
+    "full": "otel-poc Blueprint"
   },
   "description": {
     "short": "A brief description of what your agent does.",
@@ -14,7 +14,7 @@
     "color": "color.png"
   },
   "accentColor": "#9ec9d9",
-  "version": "1.2.7",
+  "version": "1.0.0",
   "manifestVersion": "devPreview",
   "developer": {
     "name": "Microsoft Corporation",
@@ -22,24 +22,6 @@
     "websiteUrl": "https://go.microsoft.com/fwlink/?LinkId=518028",
     "privacyUrl": "https://go.microsoft.com/fwlink/?LinkId=518028",
     "termsOfUseUrl": "https://shares.datatransfer.microsoft.com/assets/Microsoft_Terms_of_Use.html"
-  },
-  "bots": [
-    {
-      "botId": "a9cd647c-c40d-4f95-8195-11ad34d6c7b6",
-      "scopes": ["personal", "team", "groupChat"],
-      "supportsFiles": false,
-      "isNotificationOnly": false
-    }
-  ],
-  "copilotAgents": {
-    "customEngineAgents": [
-      {
-        "id": "a9cd647c-c40d-4f95-8195-11ad34d6c7b6",
-        "type": "bot",
-        "functionsAs": "agentOrAgenticUser",
-        "agenticUserTemplateId": "7b0926a6-c4ee-445a-a913-bd054594bd09"
-      }
-    ]
   },
   "agenticUserTemplates": [
     {
