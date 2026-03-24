@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="120" viewBox="0 0 720 120">
+  <rect width="720" height="120" rx="8" fill="#1a1a2e"/>
+  <rect x="0" y="0" width="720" height="120" rx="8" fill="url(#grad)" opacity="0.7"/>
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#0078d4;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#5c2d91;stop-opacity:0.3"/>
+    </linearGradient>
+  </defs>
+  <!-- Play button circle -->
+  <circle cx="60" cy="60" r="30" fill="#0078d4" opacity="0.9"/>
+  <!-- Play triangle -->
+  <polygon points="52,44 52,76 76,60" fill="white"/>
+  <!-- Title text -->
+  <text x="110" y="50" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="600" fill="white">&#9655; Video Walkthrough — Microsoft OpenTelemetry Distro Demo</text>
+  <text x="110" y="78" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#aaaacc">&#9888; Video still in progress · Click to watch</text>
+</svg>
