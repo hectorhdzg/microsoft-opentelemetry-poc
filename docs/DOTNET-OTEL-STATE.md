@@ -8,7 +8,7 @@
 
 The .NET GenAI stack has strong—but fragmented—OpenTelemetry support. The **Azure OpenAI SDK** ships native OTel spans behind an experimental feature flag, **Microsoft Agent Framework** supports OTel via `Microsoft.Extensions.AI` integration and its own `Microsoft.Agents.AI` activity sources, ASP.NET Core and HttpClient have mature community instrumentations, and Azure Monitor provides a unified exporter. However, each project must still wire up **30-70 lines of boilerplate** to configure providers, exporters, sources, and feature flags, and the level of OTel support varies significantly by which API surface is used.
 
-A **Microsoft OpenTelemetry .NET Distro** would collapse this setup into a single `.AddMicrosoftOpenTelemetry()` call, auto-register GenAI sources (including `Microsoft.Agents.AI`), and ensure consistent instrumentation regardless of which Agent Framework API surface is used — mirroring what the Python distro already proves out.
+A **Microsoft OpenTelemetry .NET Distro** would collapse this setup into a single `.AddMicrosoftOpenTelemetry()` call, auto-register known GenAI activity source patterns as strings (e.g. `"OpenAI.*"`, `"Microsoft.Agents.*"`, `"Microsoft.Extensions.AI"`) with **zero dependencies on the observed SDKs**, unify A365 + OTLP + Azure Monitor exporter wiring, and manage feature flags — mirroring what the Python distro already proves out.
 
 ---
 
@@ -23,10 +23,10 @@ The table below captures the current state of OpenTelemetry-native telemetry for
 | **ASP.NET Core** | `OpenTelemetry.Instrumentation.AspNetCore` 1.12.0 | ✅ Yes | `.AddAspNetCoreInstrumentation()` | **Traces** (HTTP server spans), **Metrics** (request duration, active requests) | HTTP semconv | Mature, stable. Part of opentelemetry-dotnet-contrib. |
 | **HttpClient** | `OpenTelemetry.Instrumentation.Http` 1.12.0 | ✅ Yes | `.AddHttpClientInstrumentation()` | **Traces** (HTTP client spans), **Metrics** (request duration) | HTTP semconv | Captures all outbound HTTP calls including Azure SDK calls. |
 | **Azure Monitor** | `Azure.Monitor.OpenTelemetry.AspNetCore` 1.3.0 | ✅ Yes | `.UseAzureMonitor()` | **Traces**, **Metrics**, **Logs** + Live Metrics, Perf Counters | Azure Monitor mapping | Unified package for ASP.NET Core apps. Bundles exporter + auto-instrumentations. |
-| **Microsoft Agent Framework** (newer `Agents.AI` API) | `Microsoft.Agents.AI` | ✅ Yes | `.AddSource("*Microsoft.Agents.AI")` + `.UseOpenTelemetry()` on agent builder | **Traces** (agent execution, function invocation), **Metrics** (`Microsoft.Agents.AI` meter) | GenAI semconv (via `Microsoft.Extensions.AI`) | Uses `ChatClientAgent` + `IChatClient` pipeline. Agent-level and chat-client-level OTel via `.UseOpenTelemetry()`. Sensitive data opt-in via `EnableSensitiveData`. See [official sample](https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentOpenTelemetry/Program.cs). |
-| **Microsoft Agent Framework** (older `Agents.Builder` API) | `Microsoft.Agents.Hosting.AspNetCore` 1.5.76-beta | ❌ No | N/A | None (no spans or metrics emitted) | N/A | `AgentApplication` base class + `OnActivity()` handlers. Activity pipeline, turn state, and Bot Framework connector calls are **not instrumented**. Requires manual `ActivitySource` spans. Legacy API — avoid for new projects. |
+| **Microsoft Agent Framework** | `Microsoft.Agents.AI` | ✅ Yes | `.AddSource("*Microsoft.Agents.AI")` + `.UseOpenTelemetry()` on agent builder | **Traces** (agent execution, function invocation), **Metrics** (`Microsoft.Agents.AI` meter) | GenAI semconv (via `Microsoft.Extensions.AI`) | Uses `ChatClientAgent` + `IChatClient` pipeline. Agent-level and chat-client-level OTel via `.UseOpenTelemetry()`. Sensitive data opt-in via `EnableSensitiveData`. See [official sample](https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentOpenTelemetry/Program.cs). |
 | **Microsoft.Extensions.AI** | `Microsoft.Extensions.AI` | ✅ Yes | Via `IChatClient` pipeline + `.UseOpenTelemetry()` | **Traces** (chat completion spans, function invocations), **Metrics** (token usage) | GenAI semconv | Abstraction layer over any AI provider. `.UseOpenTelemetry(sourceName, cfg => cfg.EnableSensitiveData = true)` adds a delegating handler. This is the **key integration layer** that enables Agent Framework OTel — the OpenAI SDK `ChatClient` is converted via `.AsIChatClient()` and then wrapped. Used in our Agent Framework POC sample for full OTel coverage. |
 | **Azure SDK (core)** | `Azure.Core` | ✅ Yes | Automatic (when OTel is configured) | **Traces** (HTTP pipeline spans) | Azure SDK conventions | Every Azure client (identity, storage, etc.) emits `Azure.*` activity sources automatically. Captured by `AddHttpClientInstrumentation()`. |
+| **A365 Observability SDK** | `Microsoft.Agents.A365.Observability.Runtime` | ✅ Yes | `builder.AddA365Tracing(...)` | **Traces** (agent execution, A365-specific spans), custom span enrichment via `ActivityProcessor` | GenAI semconv + A365-specific attributes | Full OTel integration: `AddOpenTelemetry().WithTracing()`, `Agent365Exporter`, `ConsoleExporter` (dev), ETW via `Hosting` package. Extension packages for OpenAI, Agent Framework. Auto-sets `Azure.Experimental.EnableActivitySource` switch. |
 | **LangChain (.NET)** | N/A | ❌ No | N/A | None | N/A | No official .NET LangChain library. Python/JS only. Included for cross-platform context. |
 
 ### Legend
@@ -51,6 +51,7 @@ The table below captures the current state of OpenTelemetry-native telemetry for
 | Custom (app) | `a365-agent-dotnet` / `agent-framework-dotnet-sample` | `ProcessChatRequest`, `ProcessMessage`, `ProcessUserMessage` | `user.message_length`, `assistant.message_length`, `model.deployment` |
 | Agent Framework (`Agents.AI` API) | `Microsoft.Agents.AI` | Agent execution, function invocation, streaming responses | Agent name, session ID, tool calls (via `Microsoft.Extensions.AI` pipeline) |
 | Microsoft.Extensions.AI | `Microsoft.Extensions.AI` | Chat completion, function invocation | `gen_ai.*` attributes via the `IChatClient` OTel middleware |
+| A365 Observability SDK | A365 source name (via `OpenTelemetryConstants.SourceName`) | A365-specific agent spans, enriched via `ActivityProcessor` | A365-specific attributes, token/session metadata, exported via `Agent365Exporter` |
 
 ### 3.2 Metrics
 
@@ -66,9 +67,9 @@ All projects integrate `ILogger` → OpenTelemetry via `builder.Logging.AddOpenT
 
 ---
 
-## 4. Current Integration Architecture
+## 4. Typical .NET GenAI OTel Architecture
 
-The three .NET POC projects share a common instrumentation pattern:
+A .NET GenAI application wires up OpenTelemetry using standard DI patterns:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -89,7 +90,7 @@ The three .NET POC projects share a common instrumentation pattern:
 │     └── .UseAzureMonitor()             // if conn string    │
 │  2. builder.Logging.AddOpenTelemetry()                      │
 │                                                             │
-│  3. IChatClient pipeline (Agent Framework sample):          │
+│  3. IChatClient pipeline (Agent Framework):                 │
 │     AzureOpenAI ChatClient                                  │
 │       → .AsIChatClient()                                    │
 │       → .UseFunctionInvocation()                            │
@@ -110,85 +111,17 @@ The three .NET POC projects share a common instrumentation pattern:
                                            └── Live Metrics
 ```
 
-### Per-Project Differences
-
-| Aspect | Azure OpenAI (Console) | A365 Agent (Web) | Agent Framework (Web) |
-|---|---|---|---|
-| Host model | Standalone `Sdk.CreateTracerProviderBuilder()` | `IServiceCollection.AddOpenTelemetry()` | `IServiceCollection.AddOpenTelemetry()` |
-| ASP.NET instrumentation | N/A (console app) | ✅ | ✅ |
-| HttpClient instrumentation | N/A | ✅ | ✅ |
-| Agent Framework API | N/A | N/A | `ChatClientAgent` + `IChatClient` pipeline via `Microsoft.Agents.AI` 1.0.0-rc4 |
-| OTel at AI layer | `AppContext.SetSwitch` (OpenAI SDK native) | `AppContext.SetSwitch` (OpenAI SDK native) | `.UseOpenTelemetry()` on both `IChatClient` and `ChatClientAgent` — native spans from `Microsoft.Agents.AI` + `Microsoft.Extensions.AI` |
-| Azure Monitor package | `Azure.Monitor.OpenTelemetry.Exporter` (manual) | `Azure.Monitor.OpenTelemetry.AspNetCore` (unified) | `Azure.Monitor.OpenTelemetry.AspNetCore` (unified) |
-| Custom spans | `ProcessUserMessage` | `ProcessMessage`, `Agent.ProcessMessage` | `ProcessChatRequest` |
+**Key points:**
+- Source registration uses **string patterns** (`"Microsoft.Agents.*"`, `"OpenAI.*"`) — no dependency on those SDKs
+- `AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry", true)` must be set before client creation
+- The `IChatClient` pipeline provides layered OTel: chat-client-level spans (via `Microsoft.Extensions.AI`) and agent-level spans (via `Microsoft.Agents.AI`)
+- Azure Monitor can be added via the unified `Azure.Monitor.OpenTelemetry.AspNetCore` package
 
 ---
 
 ## 5. Gap Analysis — What's Missing
 
-### 5.1 Agent Framework: Two API Surfaces, Two OTel Stories
-
-The Microsoft Agent Framework has **two distinct API surfaces** with very different OTel capabilities:
-
-#### Newer API: `Microsoft.Agents.AI` + `Microsoft.Extensions.AI` — ✅ OTel-enabled
-
-The [official OpenTelemetry sample](https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentOpenTelemetry/Program.cs) demonstrates full OTel integration using the newer `ChatClientAgent` API:
-
-```csharp
-// Convert OpenAI SDK ChatClient → IChatClient with OTel pipeline
-var instrumentedChatClient = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential())
-    .GetChatClient(deploymentName)
-    .AsIChatClient()                                         // → IChatClient
-    .AsBuilder()
-    .UseFunctionInvocation()                                 // tool calling
-    .UseOpenTelemetry(sourceName: SourceName,                // OTel at chat client level
-        configure: cfg => cfg.EnableSensitiveData = true)
-    .Build();
-
-// Create agent with OTel at the agent level
-var agent = new ChatClientAgent(instrumentedChatClient,
-    name: "OpenTelemetryDemoAgent",
-    instructions: "You are a helpful assistant.",
-    tools: [AIFunctionFactory.Create(GetWeatherAsync)])
-    .AsBuilder()
-    .UseOpenTelemetry(SourceName,                            // OTel at agent level
-        configure: cfg => cfg.EnableSensitiveData = true)
-    .Build();
-```
-
-**Telemetry produced:**
-- Activity source: `Microsoft.Agents.AI` — registered via `.AddSource("*Microsoft.Agents.AI")`
-- Meter: `Microsoft.Agents.AI` — registered via `.AddMeter("*Microsoft.Agents.AI")`
-- Agent execution spans, function invocation spans, streaming response spans
-- Full trace correlation from HTTP → agent → AI model → tool calls
-
-#### Older API: `Microsoft.Agents.Builder` (`AgentApplication`) — ❌ No OTel
-
-The older `AgentApplication` + `OnActivity()` pattern has **no built-in OTel**. Under this API, agent-level operations (activity routing, turn processing, state management, Bot Framework connector) are invisible in traces.
-
-With the older API, a trace looks like:
-
-```
-[ASP.NET: POST /api/messages]
-  └── [HttpClient: POST openai.azure.com/...]
-        └── [OpenAI SDK: chat gpt-4o]
-```
-
-With the **newer API** (used in our POC), the same request produces:
-
-```
-[ASP.NET: POST /api/chat]
-  └── [ProcessChatRequest]                          ← custom app span
-        └── [Microsoft.Agents.AI: Agent Execution]
-              ├── [Microsoft.Extensions.AI: Chat Completion]
-              │     └── [OpenAI SDK: chat gpt-4o]
-              └── [Microsoft.Extensions.AI: Function Invocation]
-                    └── [GetWeatherAsync]
-```
-
-**Our POC uses the newer `ChatClientAgent` API**, demonstrating full native OTel support with no bridge instrumentation needed.
-
-### 5.2 Manual Boilerplate per Project
+### 5.1 Manual Boilerplate per Project
 
 Each project repeats 30-70 lines of OTel configuration:
 
@@ -199,7 +132,7 @@ Each project repeats 30-70 lines of OTel configuration:
 - Logger integration
 - Conditional exporters (OTLP, Azure Monitor, Console)
 
-### 5.3 No Standardized GenAI Attributes
+### 5.2 No Standardized GenAI Attributes
 
 Custom spans use ad-hoc attributes (`user.message_length`, `assistant.message_length`, `model.deployment`) instead of the [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes like `gen_ai.request.model`, `gen_ai.usage.input_tokens`, etc. The OpenAI SDK handles this for its own spans, but application-level spans don't follow the convention.
 
@@ -207,118 +140,62 @@ Custom spans use ad-hoc attributes (`user.message_length`, `assistant.message_le
 
 ## 6. Does .NET Need a Microsoft OpenTelemetry Distro?
 
-### 6.1 The Honest Assessment: .NET Already Covers Most of the Ground
+### 6.1 The Primary Value: Convergence with A365
 
-Unlike Python — where the distro consolidates a fragmented ecosystem of community instrumentations, manual provider setup, and missing bridge libraries — the .NET ecosystem is **already well-integrated through first-party SDKs**:
+The A365 .NET Observability SDK (`Microsoft.Agents.A365.Observability.Runtime`) already provides `AddA365Tracing()` — a standalone OTel setup that wires the `Agent365Exporter`, span processors, and activity sources. Meanwhile, developers building .NET GenAI apps use standard `AddOpenTelemetry()` with OTLP / Azure Monitor exporters and manually register sources like `"OpenAI.*"`, `"Microsoft.Agents.*"`, `"Microsoft.Extensions.AI"`.
 
-| Capability | .NET Native Solution | Python (requires distro) |
-|---|---|---|
-| **OTel provider setup** | `builder.Services.AddOpenTelemetry()` — built into `Microsoft.Extensions.Hosting` | Manual `TracerProvider` / `MeterProvider` / `LoggerProvider` construction |
-| **Web framework instrumentation** | Single `AddAspNetCoreInstrumentation()` covers all ASP.NET Core apps | Separate packages for Django, FastAPI, Flask — each must be activated individually |
-| **GenAI (OpenAI) telemetry** | Native in OpenAI .NET SDK via `AppContext.SetSwitch` | Requires community `opentelemetry-instrumentation-openai-v2` package |
-| **Agent Framework telemetry** | Native via `ChatClientAgent` + `.UseOpenTelemetry()` | Requires A365-specific bridge instrumentor |
-| **AI abstraction layer** | `Microsoft.Extensions.AI` with `.UseOpenTelemetry()` built-in | No equivalent — each library instrumented separately |
-| **Azure Monitor export** | `Azure.Monitor.OpenTelemetry.AspNetCore` — single package, bundles everything | `azure-monitor-opentelemetry` — similar, but distro adds value by unifying with OTLP + A365 |
-| **DI / builder pattern** | First-class via `IServiceCollection` extensions | Not native to Python — distro fills this gap |
+**These are two separate OTel pipelines solving similar problems.** A distro's primary value is unifying them:
 
-**In short:** The Python distro replaces ~250 lines of scattered setup with a single call. In .NET, the "before" is already only ~30-50 lines of clean, idiomatic code using standard DI patterns. The marginal value of collapsing 40 lines into 5 is much lower.
+| Without distro | With distro |
+|---|---|
+| `AddA365Tracing()` for A365 exporter — separate SDK, own OTel pipeline | Single `AddMicrosoftOpenTelemetry()` that wires A365 + OTLP + Azure Monitor together |
+| Manual `AddOpenTelemetry().WithTracing(...)` for OTLP / Azure Monitor | Same call handles all exporters declaratively |
+| Developer must know and register source strings (`"OpenAI.*"`, etc.) | Known GenAI sources registered automatically |
+| `AppContext.SetSwitch` must be called before client creation — easy to forget | Distro handles feature flags automatically |
+| A365 pipeline and OTLP pipeline configured independently — risk of divergent resource attributes, sampling, source lists | Single pipeline, single configuration, consistent behavior |
 
-### 6.2 Where a .NET Distro *Would* Still Add Value
+Instead of teams combining `AddA365Tracing()` with their own OTel setup (potentially getting different resource names, different source registrations, different sampling strategies), the distro provides one unified entry point.
 
-Despite the strong native support, there are real gaps a distro could fill. Critically, any distro must follow the **core OTel philosophy**: SDK authors are responsible for producing their own telemetry; the distro only configures the *collection pipeline* (providers, exporters, resource attributes, source registration). **The distro must never depend on the SDKs it observes.**
+### 6.2 Secondary Benefits
 
-This is exactly what makes .NET's situation favorable: Agent Framework, OpenAI SDK, and `Microsoft.Extensions.AI` all already produce OTel-native telemetry. The distro just needs to make sure the pipeline is listening.
+- **Cross-language consistency** — Teams running Python + .NET agents get the same env vars (`ENABLE_OTLP_EXPORTER`, `APPLICATIONINSIGHTS_CONNECTION_STRING`), same parameter names, same behavior
+- **Enterprise standardization** — "Golden path" config for many teams, prevents drift and misconfigurations
+- **Guardrails** — No need to learn `WithTracing` vs `WithMetrics` vs `AddOpenTelemetry` on logging; a validated default reduces subtle misconfigurations
 
-#### ① A365 Exporter (does not exist in .NET today)
+### 6.3 What the Distro is NOT
 
-The Python distro includes A365-specific export — `EnrichingBatchSpanProcessor` → `Agent365Exporter` — with token resolvers, cluster categories, and span enrichment. **There is no .NET equivalent.** If A365 export is a requirement, a distro or standalone package is the only way to get it.
+The distro is a **pipeline configurator, not a capability enabler**. The SDKs (OpenAI, Agent Framework, `Microsoft.Extensions.AI`, A365 Observability) already produce OTel telemetry natively. The distro:
 
-#### ② Source Registration (strings only — zero SDK dependencies)
+- Depends **only** on OTel SDK + exporter packages — never on `Microsoft.Agents.AI`, `Azure.AI.OpenAI`, or any AI SDK
+- Registers activity sources as **string patterns** (`"OpenAI.*"`, `"Microsoft.Agents.*"`) — zero assembly references
+- Configures the collection pipeline (providers, exporters, resource attributes, sampling)
 
-Developers must currently discover and register the correct activity source and meter names:
-
-```csharp
-// You have to know these exist and spell them correctly
-.AddSource("Microsoft.Agents.*")
-.AddSource("Microsoft.Extensions.AI")
-.AddSource("OpenAI.*")
-.AddMeter("Microsoft.Agents.*")
-.AddMeter("Microsoft.Extensions.AI")
-.AddMeter("OpenAI.*")
-```
-
-A distro could register all known GenAI sources automatically. These are just strings passed to `.AddSource()` / `.AddMeter()` — **no NuGet dependency on any AI SDK is needed**. The distro registers wildcard patterns like `"Microsoft.Agents.*"` and `"OpenAI.*"`; if the user's app happens to use those SDKs, spans flow through. If not, the patterns are harmless no-ops.
-
-This is the correct architecture — the distro depends only on OpenTelemetry packages and exporter packages, never on `Microsoft.Agents.AI`, `Azure.AI.OpenAI`, or any other SDK that produces telemetry. Those SDKs bring their own `ActivitySource` / `Meter` instances; the distro just ensures the pipeline is configured to collect them.
-
-#### ③ Feature Flag Management
-
-The OpenAI SDK requires `AppContext.SetSwitch("OpenAI.Experimental.EnableOpenTelemetry", true)` *before* any client is created. Easy to forget, impossible to debug when missed. A distro would handle this automatically.
-
-#### ④ Cross-Language Consistency
-
-Enterprise teams running Python agents alongside .NET agents benefit from a single configuration model. Same env vars (`ENABLE_OTLP_EXPORTER`, `APPLICATIONINSIGHTS_CONNECTION_STRING`), same parameter names, same behavior — regardless of runtime.
-
-#### ⑤ Multi-Exporter Wiring
-
-The conditional `if (enableOtlp)` / `if (!string.IsNullOrEmpty(azMonConnectionString))` pattern is repeated in every project. A distro makes this declarative.
-
-#### ⑥ Guardrails for New Teams
-
-Teams new to OTel don't need to learn `WithTracing` vs `WithMetrics` vs `AddOpenTelemetry` on logging. A validated default configuration reduces the probability of subtle misconfigurations (e.g., forgetting to register a source, missing the feature flag, not correlating logs with traces).
-
-### 6.3 Proposed API (if built)
+### 6.4 Proposed API
 
 ```csharp
-// The distro depends ONLY on OTel SDK + exporter packages.
-// No dependency on Azure.AI.OpenAI, Microsoft.Agents.AI, or any AI SDK.
-// It just configures the pipeline — the SDKs produce their own telemetry.
 builder.Services.AddMicrosoftOpenTelemetry(options =>
 {
     options.ServiceName = "my-agent";
     options.EnableGenAI = true;               // registers known GenAI source patterns (strings only)
     options.EnableOtlpExport = true;          // OTLP exporter
     options.AzureMonitorConnectionString = connectionString;
-    options.EnableA365Export = true;           // A365 exporter (the big gap)
+    options.EnableA365Export = true;           // A365 exporter (wraps existing A365 Observability SDK)
     options.A365TokenResolver = tokenResolver;
 });
-
-// Under the hood, EnableGenAI = true does:
-//   .AddSource("OpenAI.*")
-//   .AddSource("Microsoft.Agents.*")
-//   .AddSource("Microsoft.Extensions.AI")
-//   .AddMeter("OpenAI.*")
-//   .AddMeter("Microsoft.Agents.*")
-//   .AddMeter("Microsoft.Extensions.AI")
-// These are just string patterns — no assembly references.
 ```
 
-### 6.4 Value Assessment by Scenario
+### 6.5 Value by Scenario
 
-| Scenario | Distro Value | Why |
+| Scenario | Value | Why |
 |---|---|---|
-| **Greenfield .NET GenAI app** | 🟡 Moderate | Saves 30-40 lines of boilerplate, auto-registers sources. Nice-to-have, not essential. |
-| **Team running Python + .NET agents** | 🟢 High | Cross-language consistency in config, env vars, and behavior. |
-| **A365-deployed agents** | 🟢 High | A365 exporter only available through distro. No .NET alternative exists. |
-| **Enterprise with many teams** | 🟢 High | Standardized "golden path" config prevents drift and misconfigurations. |
-| **Single .NET app, Azure Monitor only** | 🔴 Low | `Azure.Monitor.OpenTelemetry.AspNetCore` already does everything needed. |
-| **Single .NET app, OTLP + Jaeger** | 🔴 Low | Standard OTel setup is ~30 lines, well-documented, idiomatic. |
-
-### 6.5 Bottom Line
-
-**The .NET distro is a pipeline configurator, not a capability enabler.** The SDKs (OpenAI, Agent Framework, `Microsoft.Extensions.AI`) already produce OTel telemetry natively — that's the whole point of OpenTelemetry. The distro's job is to configure the collection pipeline (providers, exporters, source registration) without depending on any of those SDKs.
-
-The distro's strongest justifications are:
-
-1. **A365 export** — genuinely missing in .NET, no alternative exists
-2. **Cross-language teams** — single config model across Python/.NET/JS
-3. **Enterprise standardization** — "golden path" for many teams, prevents config drift
-4. **Source registration** — maintain a known list of GenAI activity source patterns so developers don't have to discover magic strings
-
-For a single team building one .NET agent with Azure Monitor or OTLP, the native SDK integrations are sufficient and idiomatic. The distro becomes compelling when you add A365 requirements, multi-language deployments, or organizational scale.
+| **A365-deployed agents needing OTLP/Azure Monitor too** | **High** | Unifies A365 exporter with OTLP + Azure Monitor in one pipeline — the core convergence story |
+| **Team running Python + .NET agents** | **High** | Cross-language consistency in config, env vars, and behavior |
+| **Enterprise with many teams** | **High** | Standardized "golden path" prevents drift and misconfigurations |
+| **Greenfield .NET GenAI app** | Moderate | Saves boilerplate, auto-registers sources |
+| **Single .NET app, Azure Monitor only** | Low | `Azure.Monitor.OpenTelemetry.AspNetCore` already does everything needed |
+| **Single .NET app, OTLP only** | Low | Standard OTel setup is ~30 lines, well-documented, idiomatic |
 
 ---
-
 ## 7. Exporter & Backend Topology
 
 ### Local Development (Docker Compose)
